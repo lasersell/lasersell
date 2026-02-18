@@ -309,8 +309,18 @@ jobs:
           gpgconf --kill gpg-agent || true
 
       - name: Add public key file to repo root (for users)
+        env:
+          APT_PUBLIC_KEY_ASC: ${{ secrets.APT_PUBLIC_KEY_ASC }}
         run: |
-          gpg --armor --export "${GPG_KEY_FPR}" > release-repo/KEY.gpg
+          if [ -z "${APT_PUBLIC_KEY_ASC:-}" ]; then
+            echo "Missing required secret: APT_PUBLIC_KEY_ASC" >&2
+            exit 1
+          fi
+          printf '%s\n' "${APT_PUBLIC_KEY_ASC}" > release-repo/lasersell.asc
+          if ! grep -q "BEGIN PGP PUBLIC KEY BLOCK" release-repo/lasersell.asc; then
+            echo "APT_PUBLIC_KEY_ASC is not an armored PGP public key block" >&2
+            exit 1
+          fi
 
       - name: Update APT repo metadata + sign
         env:
