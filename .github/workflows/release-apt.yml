@@ -1,0 +1,427 @@
+name: Release LaserSell
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Actually publish to apt + homebrew (normally only on tags)"
+        required: false
+        default: "false"
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lasersell-release
+  cancel-in-progress: false
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+
+    env:
+      PACKAGE_NAME: lasersell
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Determine version
+        run: |
+          CARGO_VERSION=$(cargo metadata --no-deps --format-version 1 | python3 -c "import sys,json; print(json.load(sys.stdin)['packages'][0]['version'])")
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            if [ "${VERSION}" != "${CARGO_VERSION}" ]; then
+              echo "Error: git tag version (${VERSION}) does not match Cargo.toml package version (${CARGO_VERSION})."
+              exit 1
+            fi
+          else
+            VERSION="${CARGO_VERSION}"
+          fi
+          echo "VERSION=${VERSION}" >> "${GITHUB_ENV}"
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev apt-utils gnupg ruby ruby-dev build-essential pkg-config
+          sudo gem install --no-document fpm
+
+      - name: Install arm64 toolchain
+        if: matrix.arch == 'arm64'
+        run: |
+          # 1. Add the arm64 architecture
+          sudo dpkg --add-architecture arm64
+
+          # 2. Force ALL existing sources to be amd64 only
+          # This handles both traditional .list and new .sources (DEB822) formats
+          sudo python3 - <<'PY'
+          import glob
+          import os
+          import re
+
+          paths = []
+          if os.path.exists("/etc/apt/sources.list"):
+            paths.append("/etc/apt/sources.list")
+          paths += glob.glob("/etc/apt/sources.list.d/*.list")
+
+          deb_re = re.compile(r"^(\s*)(deb)\s+(\[[^\]]*\]\s+)?(.*)$")
+
+          for path in paths:
+            try:
+              with open(path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            except FileNotFoundError:
+              continue
+
+            out = []
+            for line in lines:
+              stripped = line.lstrip()
+              if not stripped or stripped.startswith("#"):
+                out.append(line)
+                continue
+
+              match = deb_re.match(line)
+              if not match:
+                out.append(line)
+                continue
+
+              lead, _deb, opt_block, rest = match.groups()
+              opts = []
+              if opt_block:
+                opt_match = re.match(r"\[([^\]]*)\]\s+", opt_block)
+                opt_str = opt_match.group(1) if opt_match else opt_block.strip()[1:-1]
+                opts = opt_str.split()
+
+              has_arch = False
+              new_opts = []
+              for token in opts:
+                if token.startswith("arch="):
+                  new_opts.append("arch=amd64")
+                  has_arch = True
+                else:
+                  new_opts.append(token)
+
+              if not has_arch:
+                new_opts.insert(0, "arch=amd64")
+
+              newline = "\n" if line.endswith("\n") else ""
+              out.append(f"{lead}deb [{ ' '.join(new_opts)}] {rest}{newline}")
+
+            with open(path, "w", encoding="utf-8") as f:
+              f.writelines(out)
+          PY
+
+          # For Ubuntu 24.04+ (Noble), handle the .sources file specifically
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i 's/Architectures: amd64 arm64/Architectures: amd64/g' /etc/apt/sources.list.d/ubuntu.sources
+            # If the line is just Architectures: amd64 (or missing), ensure it doesn't try to pull arm64
+            sudo sed -i '/^Types: deb/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources || true
+          fi
+
+          # 3. Add the ports.ubuntu.com mirror for arm64
+          # Use a dedicated file to avoid conflicts
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $(lsb_release -cs) main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $(lsb_release -cs)-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports $(lsb_release -cs)-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
+
+          # 4. Update and install dependencies
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross libssl-dev:arm64 zlib1g-dev:arm64
+          rustup target add aarch64-unknown-linux-gnu
+
+      - name: Build binary
+        run: |
+          export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=."
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            export PKG_CONFIG_ALLOW_CROSS=1
+            export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+            export OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
+            export OPENSSL_INCLUDE_DIR=/usr/include
+            export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+            export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
+            export AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_AR=aarch64-linux-gnu-ar
+            TARGET="aarch64-unknown-linux-gnu"
+            cargo build --release --target "${TARGET}"
+            echo "BIN_PATH=target/${TARGET}/release/lasersell" >> "${GITHUB_ENV}"
+          else
+            cargo build --release
+            echo "BIN_PATH=target/release/lasersell" >> "${GITHUB_ENV}"
+          fi
+
+      - name: Package .deb and tarball
+        run: |
+          mkdir -p dist
+          tar -C "$(dirname "${BIN_PATH}")" -czf "dist/lasersell_${VERSION}_linux_${{ matrix.arch }}.tar.gz" lasersell
+          fpm -s dir -t deb \
+            -n "${PACKAGE_NAME}" \
+            -v "${VERSION}" \
+            --architecture "${{ matrix.arch }}" \
+            --description "LaserSell CLI daemon for automated exits on Solana trades" \
+            --url "https://lasersell.io" \
+            --license "MIT" \
+            -p "dist/lasersell_${VERSION}_${{ matrix.arch }}.deb" \
+            "${BIN_PATH}=/usr/bin/lasersell"
+          ls -lah dist
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/*
+
+  build-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            os: macos-15-intel
+          - arch: arm64
+            os: macos-15
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Determine version
+        run: |
+          CARGO_VERSION=$(cargo metadata --no-deps --format-version 1 | python3 -c "import sys,json; print(json.load(sys.stdin)['packages'][0]['version'])")
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            if [ "${VERSION}" != "${CARGO_VERSION}" ]; then
+              echo "Error: git tag version (${VERSION}) does not match Cargo.toml package version (${CARGO_VERSION})."
+              exit 1
+            fi
+          else
+            VERSION="${CARGO_VERSION}"
+          fi
+          echo "VERSION=${VERSION}" >> "${GITHUB_ENV}"
+
+      - name: Build binary
+        run: |
+          export RUSTFLAGS="--remap-path-prefix=${GITHUB_WORKSPACE}=."
+          cargo build --release
+
+      - name: Package tarball
+        run: |
+          mkdir -p dist
+          tar -C target/release -czf "dist/lasersell_${VERSION}_darwin_${{ matrix.arch }}.tar.gz" lasersell
+          ls -lah dist
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: dist/*
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [build-linux, build-macos]
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
+
+    env:
+      PACKAGE_NAME: lasersell
+      DIST: stable
+      COMPONENT: main
+      RELEASE_REPO: lasersell/apt
+      RELEASE_BRANCH: main
+      HOMEBREW_TAP_REPO: lasersell/homebrew-lasersell
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Determine version
+        run: |
+          CARGO_VERSION=$(cargo metadata --no-deps --format-version 1 | python3 -c "import sys,json; print(json.load(sys.stdin)['packages'][0]['version'])")
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            if [ "${VERSION}" != "${CARGO_VERSION}" ]; then
+              echo "Error: git tag version (${VERSION}) does not match Cargo.toml package version (${CARGO_VERSION})."
+              exit 1
+            fi
+          else
+            VERSION="${CARGO_VERSION}"
+          fi
+          echo "VERSION=${VERSION}" >> "${GITHUB_ENV}"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+
+      - name: Install publishing dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev apt-utils gnupg
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist-debs dist-tars
+          find dist-artifacts -type f -name "*.deb" -exec cp {} dist-debs/ \;
+          find dist-artifacts -type f -name "*.tar.gz" -exec cp {} dist-tars/ \;
+          ls -lah dist-debs dist-tars
+
+      - name: Checkout APT repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.RELEASE_REPO }}
+          ref: ${{ env.RELEASE_BRANCH }}
+          token: ${{ secrets.APT_RELEASE_REPO_PAT }}
+          path: release-repo
+
+      - name: Ensure .nojekyll
+        run: |
+          touch release-repo/.nojekyll
+
+      - name: Import GPG signing key
+        run: |
+          echo "${{ secrets.APT_SIGNING_PRIVATE_KEY_B64 }}" | base64 -d > /tmp/apt-signing.key
+          gpg --batch --import /tmp/apt-signing.key
+          rm -f /tmp/apt-signing.key
+
+          gpg --list-secret-keys --with-colons | awk -F: '$1=="fpr"{print $10; exit}' > /tmp/fpr
+          echo "GPG_KEY_FPR=$(cat /tmp/fpr)" >> $GITHUB_ENV
+
+      - name: Configure gpg for loopback passphrase
+        run: |
+          mkdir -p ~/.gnupg
+          chmod 700 ~/.gnupg
+          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+          gpgconf --kill gpg-agent || true
+
+      - name: Add public key file to repo root (for users)
+        run: |
+          gpg --armor --export "${GPG_KEY_FPR}" > release-repo/KEY.gpg
+
+      - name: Update APT repo metadata + sign
+        env:
+          REPO_DIR: release-repo
+          DEB_PATH: dist-debs/*.deb
+          ARCHES: "amd64 arm64"
+          DIST: ${{ env.DIST }}
+          COMPONENT: ${{ env.COMPONENT }}
+          PACKAGE_NAME: ${{ env.PACKAGE_NAME }}
+          GPG_KEY_FPR: ${{ env.GPG_KEY_FPR }}
+          GPG_PASSPHRASE: ${{ secrets.APT_SIGNING_KEY_PASSPHRASE }}
+        run: |
+          bash scripts/apt_repo_update.sh
+
+      - name: Update binary tarballs + latest metadata
+        run: |
+          version_dir="release-repo/binaries/lasersell/${VERSION}"
+          latest_dir="release-repo/binaries/lasersell/latest"
+
+          mkdir -p "${version_dir}" "${latest_dir}"
+          rm -f "${latest_dir}"/*.tar.gz
+
+          cp dist-tars/*.tar.gz "${version_dir}/"
+
+          for tar_file in dist-tars/*.tar.gz; do
+            base_name="$(basename "${tar_file}")"
+            latest_name="${base_name/_${VERSION}/}"
+            cp "${tar_file}" "${latest_dir}/${latest_name}"
+          done
+
+          echo "${VERSION}" > "${version_dir}/VERSION"
+          echo "${VERSION}" > "${latest_dir}/VERSION"
+          echo "${VERSION}" > "release-repo/binaries/lasersell/latest.txt"
+
+          (cd "${version_dir}" && sha256sum *.tar.gz > SHA256SUMS)
+          (cd "${latest_dir}" && sha256sum *.tar.gz > SHA256SUMS)
+
+      - name: Commit and push APT repo
+        run: |
+          cd release-repo
+          git config user.name "lasersell-ci"
+          git config user.email "ci@lasersell.app"
+          git add -A
+          git commit -m "lasersell ${VERSION}" || echo "No changes to commit"
+          git push
+
+      - name: Checkout Homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.HOMEBREW_TAP_REPO }}
+          token: ${{ secrets.HOMEBREW_TAP_REPO_PAT }}
+          path: homebrew-tap
+
+      - name: Update Homebrew formula
+        run: |
+          mkdir -p homebrew-tap/Formula
+
+          SHA_DARWIN_AMD64=$(sha256sum "dist-tars/lasersell_${VERSION}_darwin_amd64.tar.gz" | awk '{print $1}')
+          SHA_DARWIN_ARM64=$(sha256sum "dist-tars/lasersell_${VERSION}_darwin_arm64.tar.gz" | awk '{print $1}')
+          SHA_LINUX_AMD64=$(sha256sum "dist-tars/lasersell_${VERSION}_linux_amd64.tar.gz" | awk '{print $1}')
+          SHA_LINUX_ARM64=$(sha256sum "dist-tars/lasersell_${VERSION}_linux_arm64.tar.gz" | awk '{print $1}')
+
+          cat > homebrew-tap/Formula/lasersell.rb <<EOF
+          class Lasersell < Formula
+            desc "Non-custodial Solana trading client for executing automated LaserSell strategies"
+            homepage "https://lasersell.io"
+            license "MIT"
+            version "${VERSION}"
+
+            on_macos do
+              on_arm do
+                url "https://dl.lasersell.io/apt/binaries/lasersell/${VERSION}/lasersell_${VERSION}_darwin_arm64.tar.gz"
+                sha256 "${SHA_DARWIN_ARM64}"
+              end
+              on_intel do
+                url "https://dl.lasersell.io/apt/binaries/lasersell/${VERSION}/lasersell_${VERSION}_darwin_amd64.tar.gz"
+                sha256 "${SHA_DARWIN_AMD64}"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "https://dl.lasersell.io/apt/binaries/lasersell/${VERSION}/lasersell_${VERSION}_linux_arm64.tar.gz"
+                sha256 "${SHA_LINUX_ARM64}"
+              end
+              on_intel do
+                url "https://dl.lasersell.io/apt/binaries/lasersell/${VERSION}/lasersell_${VERSION}_linux_amd64.tar.gz"
+                sha256 "${SHA_LINUX_AMD64}"
+              end
+            end
+
+            def install
+              bin.install "lasersell"
+            end
+
+            test do
+              assert_match "lasersell #{version}", shell_output("#{bin}/lasersell --version")
+            end
+
+            livecheck do
+              url "https://dl.lasersell.io/apt/binaries/lasersell/latest.txt"
+              regex(/(\d+\.\d+\.\d+)/)
+            end
+          end
+          EOF
+
+      - name: Commit and push Homebrew tap
+        run: |
+          cd homebrew-tap
+          git config user.name "lasersell-ci"
+          git config user.email "ci@lasersell.app"
+          git add -A
+          git commit -m "lasersell ${VERSION}" || echo "No changes to commit"
+          git push

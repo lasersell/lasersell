@@ -1,0 +1,25 @@
+/target
+**/*.rs.bk
+*.log
+.DS_Store
+.env
+.idea/
+.vscode/
+config.yml
+config.keystore.json
+
+# Node tooling
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+devnet/pump-tests/last-mint.json
+devnet/pump-tests/keys/
+devnet/keys/
+devnet/dbc-tests/last-coin.json
+devnet/raydium-tests/last-launchpad.json
+devnet/raydium-tests/last-migration.json
+devnet/dbc-tests/keys/
+devnet/dbc-tests/config-keypair.json
+debug*.txt

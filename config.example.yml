@@ -1,0 +1,28 @@
+account:
+  # Optional env overrides:
+  # - LASERSELL_KEYPAIR_PATH
+  # - LASERSELL_RPC_URL (or LASERSELL_PRIVATE_RPC_URL)
+  # - LASERSELL_API_KEY
+  keypair_path: "/abs/path/wallet.keystore.json" # default: ~/.lasersell/wallet.keystore.json; encrypted Lasersell keystore (recommended); legacy Solana keypair JSON also supported
+  # false: production endpoints (wss://stream.lasersell.io/v1/ws, https://api.lasersell.io)
+  # true: local endpoints (ws://localhost:8082/v1/ws, http://localhost:8080)
+  local: false
+  # https:// recommended; http:// allowed only for localhost/private RPC endpoints
+  rpc_url: "https://example-rpc.yourdomain.com"
+  api_key: "your-lasersell-api-key"
+
+strategy:
+  # Use a percent string based on the detected buy amount.
+  # Examples: target_profit: "10%"; stop_loss: "0.5%".
+  # Set stop_loss to 0% to disable it.
+  target_profit: "10%"        # take profit as percent of buy
+  stop_loss: "0%"             # stop loss as percent of buy (0% disables)
+  deadline_timeout: 30        # force sell-all after N seconds (0 disables)
+
+sell:
+  slippage_pad_bps: 2000               # extra slippage added on top of computed value
+  slippage_retry_bump_bps_first: 20    # extra pad added after first slippage error
+  slippage_retry_bump_bps_next: 40     # extra pad added after subsequent slippage errors
+  slippage_max_bps: 2500               # max slippage in basis points
+  confirm_timeout_sec: 25              # devnet default (mainnet default is 10)
+  max_retries: 2                       # retry count for failed sells
