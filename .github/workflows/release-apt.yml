@@ -169,7 +169,8 @@ jobs:
             -n "${PACKAGE_NAME}" \
             -v "${VERSION}" \
             --architecture "${{ matrix.arch }}" \
-            --description "LaserSell CLI daemon for automated exits on Solana trades" \
+            --maintainer "LaserSell <support@lasersell.io>" \
+            --description "LaserSell: Solana trading client with exit intelligence for automated strategy execution" \
             --url "https://lasersell.io" \
             --license "MIT" \
             -p "dist/lasersell_${VERSION}_${{ matrix.arch }}.deb" \
@@ -299,6 +300,10 @@ jobs:
           rm -f /tmp/apt-signing.key
 
           gpg --list-secret-keys --with-colons | awk -F: '$1=="fpr"{print $10; exit}' > /tmp/fpr
+          if [ ! -s /tmp/fpr ]; then
+            echo "Failed to resolve GPG key fingerprint after importing signing key" >&2
+            exit 1
+          fi
           echo "GPG_KEY_FPR=$(cat /tmp/fpr)" >> $GITHUB_ENV
 
       - name: Configure gpg for loopback passphrase
@@ -309,16 +314,14 @@ jobs:
           gpgconf --kill gpg-agent || true
 
       - name: Add public key file to repo root (for users)
-        env:
-          APT_PUBLIC_KEY_ASC: ${{ secrets.APT_PUBLIC_KEY_ASC }}
         run: |
-          if [ -z "${APT_PUBLIC_KEY_ASC:-}" ]; then
-            echo "Missing required secret: APT_PUBLIC_KEY_ASC" >&2
+          if [ -z "${GPG_KEY_FPR:-}" ]; then
+            echo "Missing required env var: GPG_KEY_FPR" >&2
             exit 1
           fi
-          printf '%s\n' "${APT_PUBLIC_KEY_ASC}" > release-repo/lasersell.asc
+          gpg --batch --yes --armor --export "${GPG_KEY_FPR}" > release-repo/lasersell.asc
           if ! grep -q "BEGIN PGP PUBLIC KEY BLOCK" release-repo/lasersell.asc; then
-            echo "APT_PUBLIC_KEY_ASC is not an armored PGP public key block" >&2
+            echo "Failed to export an armored PGP public key from ${GPG_KEY_FPR}" >&2
             exit 1
           fi
 
@@ -385,7 +388,7 @@ jobs:
 
           cat > homebrew-tap/Formula/lasersell.rb <<EOF
           class Lasersell < Formula
-            desc "Non-custodial Solana trading client for executing automated LaserSell strategies"
+            desc "LaserSell: Solana trading client with exit intelligence for automated strategy execution"
             homepage "https://lasersell.io"
             license "MIT"
             version "${VERSION}"
