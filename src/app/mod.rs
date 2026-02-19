@@ -9,13 +9,14 @@ use lasersell_sdk::exit_api::{
     BuildSellTxRequest, ExitApiClient, ExitApiClientOptions, SellOutput,
 };
 use lasersell_sdk::stream::proto::{MarketContextMsg, StrategyConfigMsg};
+use lasersell_sdk::tx::TxSubmitError;
 use parking_lot::RwLock as ParkingRwLock;
 use secrecy::{ExposeSecret, SecretString};
 use solana_sdk::program_pack::Pack;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
 use tokio::sync::{mpsc, Mutex};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::config::{Config, SellConfig, StrategyConfig};
 use crate::events::{emit, AppCommand, AppEvent};
@@ -518,6 +519,7 @@ async fn process_exit_signal_with_tx(
     let stream_states = stream_states.clone();
     let stream_handle = stream_handle.clone();
     tokio::spawn(async move {
+        let sell_reason = canonical_sell_reason(&reason).to_string();
         let token_program =
             match resolve_token_program(&rpc_http, &rpc_url, &token_program, mint_pubkey).await {
                 Ok(value) => value,
@@ -540,9 +542,15 @@ async fn process_exit_signal_with_tx(
             mint: mint_pubkey,
             tokens: position_tokens,
         });
+        info!(
+            event = "sell_scheduled",
+            mint = %mint_pubkey,
+            reason = %sell_reason,
+            profit_lamports = profit_units
+        );
         emit(AppEvent::SellScheduled {
             mint: mint_pubkey,
-            reason: reason.clone(),
+            reason: sell_reason.clone(),
             profit_lamports: profit_units,
         });
 
@@ -563,10 +571,17 @@ async fn process_exit_signal_with_tx(
 
         match result {
             Ok((signature, slippage_bps)) => {
+                info!(
+                    event = "sell_complete",
+                    mint = %mint_pubkey,
+                    signature = %signature,
+                    reason = %sell_reason,
+                    slippage_bps
+                );
                 emit(AppEvent::SellComplete {
                     mint: mint_pubkey,
                     signature,
-                    reason,
+                    reason: sell_reason,
                     slippage_bps,
                 });
                 emit(AppEvent::SessionClosed { mint: mint_pubkey });
@@ -581,6 +596,7 @@ async fn process_exit_signal_with_tx(
                     position_id,
                     error = %err
                 );
+                warn!(event = "session_error", mint = %mint_pubkey, error = %err);
                 emit(AppEvent::SessionError {
                     mint: mint_pubkey,
                     error: err.to_string(),
@@ -621,7 +637,14 @@ async fn execute_auto_sell_with_refresh(
 
         let send_result = async {
             let signed_tx = sign_unsigned_tx(&unsigned_tx_b64, &keypair)?;
-            send_tx(&rpc_http, &rpc_url, &signed_tx, local_mode).await
+            send_tx(
+                &rpc_http,
+                &rpc_url,
+                &signed_tx,
+                local_mode,
+                Duration::from_secs(sell_cfg.confirm_timeout_sec),
+            )
+            .await
         }
         .await;
 
@@ -636,7 +659,7 @@ async fn execute_auto_sell_with_refresh(
                 emit(AppEvent::SellRetry {
                     mint,
                     attempt,
-                    phase: "tx_send".to_string(),
+                    phase: classify_sell_retry_phase(&err).to_string(),
                     error: err.to_string(),
                 });
 
@@ -649,6 +672,29 @@ async fn execute_auto_sell_with_refresh(
                 attempt += 1;
             }
         }
+    }
+}
+
+fn classify_sell_retry_phase(err: &anyhow::Error) -> &'static str {
+    if err.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<TxSubmitError>(),
+            Some(TxSubmitError::ConfirmTimeout { .. } | TxSubmitError::TxFailed { .. })
+        )
+    }) {
+        "tx_confirm"
+    } else {
+        "tx_send"
+    }
+}
+
+fn canonical_sell_reason(reason: &str) -> &str {
+    match reason {
+        "target" | "profit" | "target_profit" => "target",
+        "stop_loss" => "stop_loss",
+        "timeout" | "deadline_timeout" => "timeout",
+        "manual" | "manual_sell" => "manual",
+        _ => reason,
     }
 }
 
@@ -715,7 +761,9 @@ async fn trigger_manual_sell(
         return;
     }
 
-    let slippage_bps = runtime_sell.read().slippage_pad_bps;
+    let sell_cfg = runtime_sell.read().clone();
+    let slippage_bps = sell_cfg.slippage_pad_bps;
+    let confirm_timeout_sec = sell_cfg.confirm_timeout_sec;
     let token_program_hint = snapshot.token_program.clone();
     let tokens = snapshot.tokens;
     let market_context = snapshot
@@ -727,6 +775,7 @@ async fn trigger_manual_sell(
     let rpc_http = rpc_http.clone();
     let rpc_url = rpc_url.clone();
     tokio::spawn(async move {
+        let sell_reason = canonical_sell_reason("manual_sell").to_string();
         let token_program =
             match resolve_token_program(&rpc_http, &rpc_url, &token_program_hint, mint).await {
                 Ok(value) => value,
@@ -745,9 +794,15 @@ async fn trigger_manual_sell(
             started_at_ms: now_ms(),
         });
         emit(AppEvent::PositionTokensUpdated { mint, tokens });
+        info!(
+            event = "sell_scheduled",
+            mint = %mint,
+            reason = %sell_reason,
+            profit_lamports = 0i64
+        );
         emit(AppEvent::SellScheduled {
             mint,
-            reason: "manual_sell".to_string(),
+            reason: sell_reason.clone(),
             profit_lamports: 0,
         });
         emit(AppEvent::SellAttempt {
@@ -766,22 +821,31 @@ async fn trigger_manual_sell(
             local_mode,
             tokens,
             slippage_bps,
+            confirm_timeout_sec,
             market_context,
         )
         .await;
 
         match result {
             Ok(signature) => {
+                info!(
+                    event = "sell_complete",
+                    mint = %mint,
+                    signature = %signature,
+                    reason = %sell_reason,
+                    slippage_bps
+                );
                 emit(AppEvent::SellComplete {
                     mint,
                     signature,
-                    reason: "manual_sell".to_string(),
+                    reason: sell_reason.clone(),
                     slippage_bps,
                 });
                 emit(AppEvent::SessionClosed { mint });
             }
             Err(err) => {
                 warn!(event = "manual_sell_failed", mint = %mint, error = %err);
+                warn!(event = "session_error", mint = %mint, error = %err);
                 emit(AppEvent::SessionError {
                     mint,
                     error: err.to_string(),
@@ -802,6 +866,7 @@ async fn execute_manual_sell(
     local_mode: bool,
     tokens: u64,
     slippage_bps: u16,
+    confirm_timeout_sec: u64,
     market_context: Option<MarketContext>,
 ) -> Result<String> {
     let request = build_manual_sell_request(
@@ -818,7 +883,14 @@ async fn execute_manual_sell(
         .context("build sell tx")?;
     let keypair = Keypair::try_from(&keypair_bytes[..]).context("decode keypair")?;
     let signed_tx = sign_unsigned_tx(&unsigned_tx_b64, &keypair)?;
-    let signature = send_tx(&rpc_http, &rpc_url, &signed_tx, local_mode).await?;
+    let signature = send_tx(
+        &rpc_http,
+        &rpc_url,
+        &signed_tx,
+        local_mode,
+        Duration::from_secs(confirm_timeout_sec),
+    )
+    .await?;
     Ok(signature)
 }
 
@@ -1224,5 +1296,4 @@ mod tests {
             Some("USD1")
         );
     }
-
 }

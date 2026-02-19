@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use lasersell_sdk::tx::{
-    send_via_helius_sender, send_via_rpc, sign_unsigned_tx as sdk_sign_unsigned_tx,
+    confirm_signature_via_rpc, send_via_helius_sender, send_via_rpc,
+    sign_unsigned_tx as sdk_sign_unsigned_tx,
 };
 use solana_sdk::signature::Keypair;
 use solana_sdk::transaction::VersionedTransaction;
@@ -14,14 +15,20 @@ pub async fn send_tx(
     rpc_url: &str,
     tx: &VersionedTransaction,
     local_mode: bool,
+    confirm_timeout: std::time::Duration,
 ) -> Result<String> {
-    if local_mode {
+    // sendTransaction returning a signature does not mean the tx executed successfully.
+    let signature = if local_mode {
         send_via_rpc(http, rpc_url, tx)
             .await
-            .context("send tx via rpc")
+            .context("send tx via rpc")?
     } else {
         send_via_helius_sender(http, tx)
             .await
-            .context("send tx via helius sender")
-    }
+            .context("send tx via helius sender")?
+    };
+    confirm_signature_via_rpc(http, rpc_url, &signature, confirm_timeout)
+        .await
+        .context("confirm tx via rpc")?;
+    Ok(signature)
 }

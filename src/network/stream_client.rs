@@ -2,9 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use lasersell_sdk::stream::client::{
     StreamClient as SdkStreamClient, StreamConfigure, StreamConnectionStatus, StreamSender,
 };
-use lasersell_sdk::stream::proto::{
-    MarketContextMsg, ServerMessage, StrategyConfigMsg,
-};
+use lasersell_sdk::stream::proto::{MarketContextMsg, ServerMessage, StrategyConfigMsg};
 use secrecy::SecretString;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
