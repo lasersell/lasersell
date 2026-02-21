@@ -1444,6 +1444,8 @@ dependencies = [
 [[package]]
 name = "lasersell-stream-proto"
 version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4204795fbf2f7a69afcfb4ebc832b51dfe48f5ed690ef4afabbbf08687f6050"
 dependencies = [
  "serde",
  "serde_json",
