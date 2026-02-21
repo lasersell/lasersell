@@ -293,6 +293,14 @@ impl Config {
         }
         let _ = self.strategy.target_profit_units(None)?;
         let _ = self.strategy.stop_loss_units(None)?;
+        let target_profit_pct = self.strategy.target_profit.percent_value();
+        let stop_loss_pct = self.strategy.stop_loss.percent_value();
+        let deadline_timeout_sec = self.strategy.deadline_timeout_sec;
+        if target_profit_pct <= 0.0 && stop_loss_pct <= 0.0 && deadline_timeout_sec == 0 {
+            return Err(anyhow!(
+                "at least one of strategy.target_profit, strategy.stop_loss, or strategy.deadline_timeout must be > 0"
+            ));
+        }
         Ok(())
     }
 }

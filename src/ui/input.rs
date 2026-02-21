@@ -312,6 +312,11 @@ fn handle_set_command(
         return;
     }
 
+    if let Err(err) = cfg.validate() {
+        state.push_output_reply(OutputLevel::Error, format!("{err}"));
+        return;
+    }
+
     if let Err(err) = cfg.write_to_path(&state.config_path) {
         state.push_output_reply(OutputLevel::Error, format!("Config save failed: {err}"));
         return;
