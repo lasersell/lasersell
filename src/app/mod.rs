@@ -692,7 +692,7 @@ fn canonical_sell_reason(reason: &str) -> &str {
     match reason {
         "target" | "profit" | "target_profit" => "target",
         "stop_loss" => "stop_loss",
-        "timeout" | "deadline_timeout" => "timeout",
+        "timeout" | "deadline_timeout" | "deadline" => "timeout",
         "manual" | "manual_sell" => "manual",
         _ => reason,
     }
@@ -1245,7 +1245,7 @@ fn now_ms() -> u64 {
 mod tests {
     use crate::market::{MarketContext, MeteoraDbcContext};
 
-    use super::{build_manual_sell_request, usd1_mint};
+    use super::{build_manual_sell_request, canonical_sell_reason, usd1_mint};
     use solana_sdk::pubkey::Pubkey;
 
     #[test]
@@ -1295,5 +1295,12 @@ mod tests {
             serialized.get("output").and_then(serde_json::Value::as_str),
             Some("USD1")
         );
+    }
+
+    #[test]
+    fn canonical_sell_reason_normalizes_deadline_to_timeout() {
+        assert_eq!(canonical_sell_reason("deadline"), "timeout");
+        assert_eq!(canonical_sell_reason("deadline_timeout"), "timeout");
+        assert_eq!(canonical_sell_reason("timeout"), "timeout");
     }
 }
