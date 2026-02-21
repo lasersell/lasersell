@@ -498,18 +498,13 @@ async fn smoke_stream_check(cfg: &config::Config) -> std::result::Result<(), Smo
     let strategy = StrategyConfigMsg {
         target_profit_pct: cfg.strategy.target_profit.percent_value(),
         stop_loss_pct: cfg.strategy.stop_loss.percent_value(),
-        deadline_timeout_sec: cfg.strategy.deadline_timeout_sec,
     };
-    let mut connection = timeout(
-        Duration::from_secs(5),
-        stream_client.connect(StreamConfigure::single_wallet(
-            SMOKE_WALLET_PUBKEY.to_string(),
-            strategy,
-        )),
-    )
-    .await
-    .map_err(|_| SmokeFailure::new("stream_connect_timeout"))?
-    .map_err(|_| SmokeFailure::new("stream_connect"))?;
+    let mut configure = StreamConfigure::single_wallet(SMOKE_WALLET_PUBKEY.to_string(), strategy);
+    configure.deadline_timeout_sec = cfg.strategy.deadline_timeout_sec;
+    let mut connection = timeout(Duration::from_secs(5), stream_client.connect(configure))
+        .await
+        .map_err(|_| SmokeFailure::new("stream_connect_timeout"))?
+        .map_err(|_| SmokeFailure::new("stream_connect"))?;
 
     let first_msg = timeout(Duration::from_secs(2), connection.recv())
         .await

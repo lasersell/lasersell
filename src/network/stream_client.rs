@@ -1,8 +1,9 @@
 use anyhow::{anyhow, Context, Result};
 use lasersell_sdk::stream::client::{
-    StreamClient as SdkStreamClient, StreamConfigure, StreamConnectionStatus, StreamSender,
+    StreamClient as SdkStreamClient, StreamConfigure, StreamSender,
 };
 use lasersell_sdk::stream::proto::{MarketContextMsg, ServerMessage, StrategyConfigMsg};
+use lasersell_sdk::stream::session::{StreamEvent as SdkStreamEvent, StreamSession};
 use secrecy::SecretString;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -12,18 +13,35 @@ pub struct StreamClient {
     sdk: SdkStreamClient,
     wallet_pubkey: String,
     strategy: StrategyConfigMsg,
+    deadline_timeout_sec: u64,
 }
 
 #[derive(Clone, Debug)]
 pub struct StreamHandle {
     sender: StreamSender,
+    cmd_tx: mpsc::UnboundedSender<StreamCommand>,
+}
+
+#[derive(Debug, Clone)]
+enum StreamCommand {
+    UpdateStrategy {
+        strategy: StrategyConfigMsg,
+        deadline_timeout_sec: u64,
+    },
 }
 
 impl StreamHandle {
-    pub fn update_strategy(&self, strategy: StrategyConfigMsg) -> Result<()> {
-        self.sender
-            .update_strategy(strategy)
-            .map_err(|err| anyhow!("send update_strategy: {err}"))
+    pub fn update_strategy(
+        &self,
+        strategy: StrategyConfigMsg,
+        deadline_timeout_sec: u64,
+    ) -> Result<()> {
+        self.cmd_tx
+            .send(StreamCommand::UpdateStrategy {
+                strategy,
+                deadline_timeout_sec,
+            })
+            .map_err(|err| anyhow!("queue update_strategy: {err}"))
     }
 
     pub fn request_exit_signal(&self, position_id: u64, slippage_bps: Option<u16>) -> Result<()> {
@@ -81,54 +99,77 @@ impl StreamClient {
         local: bool,
         wallet_pubkey: String,
         strategy: StrategyConfigMsg,
+        deadline_timeout_sec: u64,
     ) -> Self {
         Self {
             sdk: SdkStreamClient::new(api_key).with_local_mode(local),
             wallet_pubkey,
             strategy,
+            deadline_timeout_sec,
         }
     }
 
     pub async fn connect(&self) -> Result<(StreamHandle, mpsc::UnboundedReceiver<StreamEvent>)> {
-        let connection = self
-            .sdk
-            .connect(StreamConfigure::single_wallet(
-                self.wallet_pubkey.clone(),
-                self.strategy.clone(),
-            ))
+        let mut configure =
+            StreamConfigure::single_wallet(self.wallet_pubkey.clone(), self.strategy.clone());
+        configure.deadline_timeout_sec = self.deadline_timeout_sec;
+        let mut session = StreamSession::connect(&self.sdk, configure)
             .await
             .context("connect to stream server")?;
         info!(event = "stream_client_authed");
 
-        let (sender, mut inbound_rx, mut status_rx) = connection.split_with_status();
+        let sender = session.sender();
+        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<StreamCommand>();
         let stream_handle = StreamHandle {
             sender: sender.clone(),
+            cmd_tx,
         };
 
         let (event_tx, event_rx) = mpsc::unbounded_channel();
-        let status_tx = event_tx.clone();
+        let _ = event_tx.send(StreamEvent::ConnectionStatus { connected: true });
+
         tokio::spawn(async move {
-            while let Some(status) = status_rx.recv().await {
-                let connected = matches!(status, StreamConnectionStatus::Connected);
-                if status_tx
-                    .send(StreamEvent::ConnectionStatus { connected })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
-        tokio::spawn(async move {
-            while let Some(server_msg) = inbound_rx.recv().await {
-                if let Some(event) = map_server_event(server_msg) {
-                    if event_tx.send(event).is_err() {
-                        break;
+            let mut commands_open = true;
+            loop {
+                tokio::select! {
+                    maybe_cmd = cmd_rx.recv(), if commands_open => {
+                        match maybe_cmd {
+                            Some(StreamCommand::UpdateStrategy { strategy, deadline_timeout_sec }) => {
+                                if let Err(err) = session.update_strategy_with_deadline(strategy, deadline_timeout_sec) {
+                                    warn!(event = "stream_update_strategy_failed", error = %err);
+                                }
+                            }
+                            None => {
+                                commands_open = false;
+                            }
+                        }
+                    }
+                    maybe_evt = session.recv() => {
+                        let Some(evt) = maybe_evt else {
+                            let _ = event_tx.send(StreamEvent::ConnectionStatus { connected: false });
+                            break;
+                        };
+                        if let Some(mapped) = map_session_event(evt) {
+                            if event_tx.send(mapped).is_err() {
+                                break;
+                            }
+                        }
                     }
                 }
             }
         });
 
         Ok((stream_handle, event_rx))
+    }
+}
+
+fn map_session_event(evt: SdkStreamEvent) -> Option<StreamEvent> {
+    match evt {
+        SdkStreamEvent::Message(msg) => map_server_event(msg),
+        SdkStreamEvent::PositionOpened { message, .. } => map_server_event(message),
+        SdkStreamEvent::PositionClosed { message, .. } => map_server_event(message),
+        SdkStreamEvent::ExitSignalWithTx { message, .. } => map_server_event(message),
+        SdkStreamEvent::PnlUpdate { message, .. } => map_server_event(message),
     }
 }
 

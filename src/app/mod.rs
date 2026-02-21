@@ -133,6 +133,7 @@ impl AppEngine {
             cfg.account.local,
             wallet_pubkey.to_string(),
             strategy_to_msg(&cfg.strategy),
+            cfg.strategy.deadline_timeout_sec,
         );
         let (stream_handle, evt_rx) = stream_client.connect().await?;
         let stream_handle = Arc::new(stream_handle);
@@ -253,7 +254,7 @@ impl AppEngine {
                 *self.runtime_sell.write() = sell.clone();
                 if let Err(err) = self
                     .stream_handle
-                    .update_strategy(strategy_to_msg(&strategy))
+                    .update_strategy(strategy_to_msg(&strategy), strategy.deadline_timeout_sec)
                 {
                     warn!(event = "stream_update_strategy_failed", error = %err);
                 }
@@ -990,7 +991,6 @@ fn strategy_to_msg(strategy: &StrategyConfig) -> StrategyConfigMsg {
     StrategyConfigMsg {
         target_profit_pct: strategy.target_profit.percent_value(),
         stop_loss_pct: strategy.stop_loss.percent_value(),
-        deadline_timeout_sec: strategy.deadline_timeout_sec,
     }
 }
 
