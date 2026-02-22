@@ -693,7 +693,7 @@ fn canonical_sell_reason(reason: &str) -> &str {
     match reason {
         "target" | "profit" | "target_profit" => "target",
         "stop_loss" => "stop_loss",
-        "timeout" | "deadline_timeout" | "deadline" => "timeout",
+        "timeout" | "deadline_timeout" | "deadline" | "sell_now" => "timeout",
         "manual" | "manual_sell" => "manual",
         _ => reason,
     }
