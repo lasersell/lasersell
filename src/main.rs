@@ -150,7 +150,7 @@ async fn async_main() -> Result<()> {
 
     #[cfg(feature = "devnet")]
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,lasersell=debug"));
+        .unwrap_or_else(|_| EnvFilter::new("info,lasersell=debug,lasersell_sdk=debug"));
     #[cfg(not(feature = "devnet"))]
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     #[cfg(feature = "devnet")]

@@ -173,6 +173,7 @@ impl AppEngine {
     }
 
     async fn handle_stream_event(&mut self, evt: StreamEvent) -> Result<()> {
+        debug!(event = "app_stream_event", variant = stream_event_label(&evt));
         match evt {
             StreamEvent::ConnectionStatus { connected } => {
                 emit(AppEvent::SolanaWsStatus { connected });
@@ -273,6 +274,7 @@ impl AppEngine {
     }
 
     fn handle_balance_update(&self, mint: String, token_program: Option<String>, tokens: u64) {
+        debug!(event = "app_balance_update", mint = %mint, tokens);
         if let Ok(mint) = Pubkey::from_str(&mint) {
             {
                 let mut snapshots = self.position_snapshots.write();
@@ -304,6 +306,7 @@ impl AppEngine {
         _slot: u64,
         market_context: Option<MarketContextMsg>,
     ) {
+        info!(event = "app_position_opened", position_id, mint = %mint, tokens);
         if let Ok(mint) = Pubkey::from_str(&mint) {
             let parsed_context = match apply_market_context_update(
                 mint,
@@ -432,6 +435,16 @@ impl AppEngine {
     }
 }
 
+fn stream_event_label(evt: &StreamEvent) -> &'static str {
+    match evt {
+        StreamEvent::ConnectionStatus { .. } => "connection_status",
+        StreamEvent::BalanceUpdate { .. } => "balance_update",
+        StreamEvent::PositionOpened { .. } => "position_opened",
+        StreamEvent::PositionClosed { .. } => "position_closed",
+        StreamEvent::ExitSignalWithTx { .. } => "exit_signal_with_tx",
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn process_exit_signal_with_tx(
     paused: bool,
@@ -454,6 +467,14 @@ async fn process_exit_signal_with_tx(
     stream_states: Arc<ParkingRwLock<HashMap<Pubkey, Arc<InMemoryMarketStreamState>>>>,
     position_snapshots: Arc<ParkingRwLock<HashMap<Pubkey, PositionSnapshot>>>,
 ) -> Result<()> {
+    info!(
+        event = "app_exit_signal_processing",
+        position_id,
+        mint = %mint,
+        reason = %reason,
+        position_tokens
+    );
+
     let mint_pubkey = match Pubkey::from_str(&mint) {
         Ok(value) => value,
         Err(_) => {
@@ -499,11 +520,13 @@ async fn process_exit_signal_with_tx(
     );
 
     if paused {
+        debug!(event = "app_exit_signal_skipped_paused", mint = %mint);
         return Ok(());
     }
 
     let mut in_flight = in_flight_auto_sells.lock().await;
     if let Some(existing_tx) = in_flight.get(&position_id) {
+        debug!(event = "app_exit_signal_refreshing_inflight", position_id);
         let _ = existing_tx.send(unsigned_tx_b64);
         return Ok(());
     }
@@ -630,6 +653,7 @@ async fn execute_auto_sell_with_refresh(
     let mut slippage_bps = sell_cfg.slippage_pad_bps;
 
     loop {
+        debug!(event = "app_autosell_attempt", mint = %mint, attempt, slippage_bps);
         emit(AppEvent::SellAttempt {
             mint,
             attempt,
@@ -652,6 +676,7 @@ async fn execute_auto_sell_with_refresh(
         match send_result {
             Ok(signature) => return Ok((signature, slippage_bps)),
             Err(err) => {
+                warn!(event = "app_autosell_attempt_failed", mint = %mint, attempt, error = %err);
                 if refreshes_used >= sell_cfg.max_retries {
                     return Err(anyhow!(
                         "autosell failed for position_id {position_id} after {attempt} attempts: {err}"
@@ -666,6 +691,7 @@ async fn execute_auto_sell_with_refresh(
 
                 slippage_bps = bumped_slippage_bps(slippage_bps, refreshes_used, &sell_cfg);
                 refreshes_used += 1;
+                debug!(event = "app_autosell_refresh_requested", mint = %mint, position_id, new_slippage_bps = slippage_bps);
                 stream_handle
                     .request_exit_signal(position_id, Some(slippage_bps))
                     .context("request sell refresh over stream")?;

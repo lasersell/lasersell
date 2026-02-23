@@ -6,7 +6,7 @@ use lasersell_sdk::stream::proto::{MarketContextMsg, ServerMessage, StrategyConf
 use lasersell_sdk::stream::session::{StreamEvent as SdkStreamEvent, StreamSession};
 use secrecy::SecretString;
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 #[derive(Clone)]
 pub struct StreamClient {
@@ -146,6 +146,7 @@ impl StreamClient {
                     }
                     maybe_evt = session.recv() => {
                         let Some(evt) = maybe_evt else {
+                            warn!(event = "stream_session_ended");
                             let _ = event_tx.send(StreamEvent::ConnectionStatus { connected: false });
                             break;
                         };
@@ -163,12 +164,47 @@ impl StreamClient {
     }
 }
 
+fn sdk_event_label(evt: &SdkStreamEvent) -> &'static str {
+    match evt {
+        SdkStreamEvent::Message(_) => "message",
+        SdkStreamEvent::PositionOpened { .. } => "position_opened",
+        SdkStreamEvent::PositionClosed { .. } => "position_closed",
+        SdkStreamEvent::ExitSignalWithTx { .. } => "exit_signal_with_tx",
+        SdkStreamEvent::PnlUpdate { .. } => "pnl_update",
+    }
+}
+
 fn map_session_event(evt: SdkStreamEvent) -> Option<StreamEvent> {
+    debug!(event = "stream_session_event_received", variant = sdk_event_label(&evt));
     match evt {
         SdkStreamEvent::Message(msg) => map_server_event(msg),
-        SdkStreamEvent::PositionOpened { message, .. } => map_server_event(message),
-        SdkStreamEvent::PositionClosed { message, .. } => map_server_event(message),
-        SdkStreamEvent::ExitSignalWithTx { message, .. } => map_server_event(message),
+        SdkStreamEvent::PositionOpened { handle, message } => {
+            debug!(
+                event = "stream_position_opened_mapped",
+                position_id = handle.position_id,
+                mint = %handle.mint,
+                tokens = handle.tokens
+            );
+            map_server_event(message)
+        }
+        SdkStreamEvent::PositionClosed { handle, message } => {
+            debug!(
+                event = "stream_position_closed_mapped",
+                position_id = handle.as_ref().map(|h| h.position_id).unwrap_or(0),
+                mint = %handle.as_ref().map(|h| h.mint.as_str()).unwrap_or("unknown")
+            );
+            map_server_event(message)
+        }
+        SdkStreamEvent::ExitSignalWithTx { handle, message } => {
+            if let Some(h) = &handle {
+                info!(
+                    event = "stream_exit_signal_mapped",
+                    position_id = h.position_id,
+                    mint = %h.mint
+                );
+            }
+            map_server_event(message)
+        }
         SdkStreamEvent::PnlUpdate { message, .. } => map_server_event(message),
     }
 }
