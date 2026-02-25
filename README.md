@@ -58,6 +58,14 @@ This is fundamentally different from bots that poll a price API and then build a
 - **On-the-fly strategy changes.** Adjust take-profit, stop-loss, slippage, and timeout from the TUI command pane. Changes apply immediately and persist to disk.
 - **Adaptive slippage.** Slippage starts at your configured baseline and bumps automatically on retries, up to a hard cap you control.
 
+## Installation
+
+```bash
+curl -fsSL https://dl.lasersell.io/install.sh | sh
+```
+
+Supports macOS, Linux, Windows (WSL), and Raspberry Pi. The installer auto-detects your platform and uses Homebrew, APT, or a standalone binary as appropriate. You can also install a specific version with `--version X.Y.Z`.
+
 ## Quick start
 
 ### 1. Get an API key
