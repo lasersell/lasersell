@@ -540,8 +540,10 @@ async fn smoke_exit_api_check(cfg: &config::Config) -> std::result::Result<(), S
         slippage_bps: Some(1000),
         mode: None,
         output: Some(SellOutput::Sol),
-        referral_id: None,
+
         market_context: None,
+        send_mode: None,
+        tip_lamports: None,
     };
 
     let response = timeout(Duration::from_secs(5), exit_api.build_sell_tx(&request))

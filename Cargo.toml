@@ -17,9 +17,10 @@ bip39 = { package = "tiny-bip39", version = "0.8.2" }
 bs58 = "0.5"
 chacha20poly1305 = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
+cliclack = "0.3"
 crossterm = "0.27"
 directories = "5"
-lasersell-sdk = { path = "../lasersell-sdk/rust" }
+lasersell-sdk = "0.1"
 parking_lot = "0.12"
 rand = "0.8"
 ratatui = "0.27"

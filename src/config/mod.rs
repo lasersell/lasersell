@@ -5,6 +5,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use lasersell_sdk::tx::SendTarget;
 use reqwest::Url;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -37,6 +38,15 @@ pub struct AccountConfig {
         serialize_with = "serialize_secret_string"
     )]
     pub api_key: SecretString,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_target: Option<String>,
+    #[serde(
+        default = "default_secret_string",
+        deserialize_with = "deserialize_secret_string",
+        serialize_with = "serialize_secret_string",
+        skip_serializing_if = "is_empty_secret"
+    )]
+    pub astralane_api_key: SecretString,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -117,6 +127,10 @@ fn default_secret_string() -> SecretString {
     SecretString::new(String::new())
 }
 
+fn is_empty_secret(secret: &SecretString) -> bool {
+    secret.expose_secret().trim().is_empty()
+}
+
 fn env_nonempty(var: &str) -> Option<String> {
     match env::var(var) {
         Ok(value) => {
@@ -177,6 +191,12 @@ impl Config {
         if let Some(value) = env_nonempty("LASERSELL_API_KEY") {
             self.account.api_key = SecretString::new(value);
         }
+        if let Some(value) = env_nonempty("LASERSELL_SEND_TARGET") {
+            self.account.send_target = Some(value);
+        }
+        if let Some(value) = env_nonempty("LASERSELL_ASTRALANE_API_KEY") {
+            self.account.astralane_api_key = SecretString::new(value);
+        }
     }
 
     pub fn wallet_pubkey(&self, keypair: &Keypair) -> Result<Pubkey> {
@@ -200,6 +220,53 @@ impl Config {
             LOCAL_EXIT_API_BASE_URL.to_string()
         } else {
             EXIT_API_BASE_URL.to_string()
+        }
+    }
+
+    /// Resolves which [`SendTarget`] to use for transaction submission.
+    ///
+    /// If `account.send_target` is set it takes precedence; otherwise
+    /// `local=true` maps to RPC and `local=false` to Helius Sender.
+    pub fn resolve_send_target(&self) -> Result<SendTarget> {
+        if let Some(target) = self.account.send_target.as_deref() {
+            match target {
+                "helius_sender" => Ok(SendTarget::HeliusSender),
+                "astralane" => {
+                    let key = self.account.astralane_api_key.expose_secret().trim();
+                    if key.is_empty() {
+                        return Err(anyhow!(
+                            "account.astralane_api_key is required when send_target is \"astralane\""
+                        ));
+                    }
+                    Ok(SendTarget::Astralane {
+                        api_key: key.to_string(),
+                        region: None,
+                    })
+                }
+                "rpc" => Ok(SendTarget::Rpc {
+                    url: self.http_rpc_url(),
+                }),
+                other => Err(anyhow!(
+                    "unknown send_target \"{other}\"; expected \"helius_sender\", \"astralane\", or \"rpc\""
+                )),
+            }
+        } else if self.account.local {
+            Ok(SendTarget::Rpc {
+                url: self.http_rpc_url(),
+            })
+        } else {
+            Ok(SendTarget::HeliusSender)
+        }
+    }
+
+    /// Returns the send mode string for exit API requests.
+    pub fn send_mode_str(&self) -> &str {
+        if let Some(target) = self.account.send_target.as_deref() {
+            target
+        } else if self.account.local {
+            "rpc"
+        } else {
+            "helius_sender"
         }
     }
 
@@ -277,6 +344,18 @@ impl Config {
         let api_key = self.account.api_key.expose_secret().trim();
         if api_key.is_empty() {
             return Err(anyhow!("account.api_key must not be empty"));
+        }
+        if self.account.send_target.as_deref() == Some("astralane")
+            && self
+                .account
+                .astralane_api_key
+                .expose_secret()
+                .trim()
+                .is_empty()
+        {
+            return Err(anyhow!(
+                "account.astralane_api_key is required when send_target is \"astralane\""
+            ));
         }
         let exit_url = Url::parse(exit_api_url)
             .map_err(|_| anyhow!("internal exit-api endpoint must be a valid URL"))?;

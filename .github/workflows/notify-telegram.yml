@@ -1,0 +1,43 @@
+name: Notify Telegram on Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Telegram notification
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_NAME: ${{ github.event.release.name }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+          RELEASE_URL: ${{ github.event.release.html_url }}
+        run: |
+          # Build the message in HTML format to avoid Markdown escaping issues
+          # with release notes that may contain special characters.
+          MESSAGE="<b>🚀 LaserSell ${RELEASE_TAG}</b>"
+
+          if [ -n "${RELEASE_NAME}" ] && [ "${RELEASE_NAME}" != "${RELEASE_TAG}" ]; then
+            MESSAGE="${MESSAGE} — ${RELEASE_NAME}"
+          fi
+
+          if [ -n "${RELEASE_BODY}" ]; then
+            # Escape HTML entities in release body
+            ESCAPED_BODY=$(echo "${RELEASE_BODY}" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+            MESSAGE="${MESSAGE}
+
+          ${ESCAPED_BODY}"
+          fi
+
+          MESSAGE="${MESSAGE}
+
+          <a href=\"${RELEASE_URL}\">View release on GitHub</a>"
+
+          curl -sf -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d parse_mode="HTML" \
+            --data-urlencode "text=${MESSAGE}"

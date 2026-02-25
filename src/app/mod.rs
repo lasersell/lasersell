@@ -9,7 +9,7 @@ use lasersell_sdk::exit_api::{
     BuildSellTxRequest, ExitApiClient, ExitApiClientOptions, SellOutput,
 };
 use lasersell_sdk::stream::proto::{MarketContextMsg, StrategyConfigMsg};
-use lasersell_sdk::tx::TxSubmitError;
+use lasersell_sdk::tx::{SendTarget, TxSubmitError};
 use parking_lot::RwLock as ParkingRwLock;
 use secrecy::{ExposeSecret, SecretString};
 use solana_sdk::program_pack::Pack;
@@ -29,6 +29,16 @@ use crate::tx::{send_tx, sign_unsigned_tx};
 
 const HEARTBEAT_INTERVAL_SECS: u64 = 1;
 const AUTOSELL_REFRESH_TIMEOUT_MS: u64 = 1_500;
+const BALANCE_POLL_SECS: u64 = 5;
+const BALANCE_POLL_PUBLIC_RPC_SECS: u64 = 60;
+
+fn balance_poll_interval(rpc_url: &str) -> Duration {
+    if rpc_url.trim().contains("api.mainnet-beta.solana.com") {
+        Duration::from_secs(BALANCE_POLL_PUBLIC_RPC_SECS)
+    } else {
+        Duration::from_secs(BALANCE_POLL_SECS)
+    }
+}
 
 #[derive(Clone, Debug)]
 struct PositionSnapshot {
@@ -51,7 +61,8 @@ struct AppEngine {
     keypair_bytes: [u8; 64],
     rpc_http: reqwest::Client,
     rpc_url: String,
-    local_mode: bool,
+    send_target: SendTarget,
+    send_mode: String,
     exit_api: Arc<ExitApiClient>,
     stream_handle: Arc<StreamHandle>,
     market_contexts: Arc<ParkingRwLock<HashMap<Pubkey, MarketContext>>>,
@@ -116,9 +127,10 @@ impl AppEngine {
             .timeout(cfg.rpc_request_timeout())
             .build()?;
         let rpc_url = cfg.http_rpc_url();
-        let local_mode = cfg.account.local;
+        let send_target = cfg.resolve_send_target()?;
+        let send_mode = cfg.send_mode_str().to_string();
 
-        spawn_wallet_balance_fetch(rpc_http.clone(), rpc_url.clone(), wallet_pubkey);
+        spawn_wallet_balance_poller(rpc_http.clone(), rpc_url.clone(), wallet_pubkey);
         spawn_usd1_balance_poller(rpc_http.clone(), rpc_url.clone(), wallet_pubkey);
 
         let exit_api = Arc::new(build_exit_api_client(
@@ -159,7 +171,8 @@ impl AppEngine {
                 keypair_bytes,
                 rpc_http,
                 rpc_url,
-                local_mode,
+                send_target,
+                send_mode,
                 exit_api,
                 stream_handle,
                 market_contexts,
@@ -408,7 +421,7 @@ impl AppEngine {
             self.rpc_http.clone(),
             self.keypair_bytes,
             self.rpc_url.clone(),
-            self.local_mode,
+            self.send_target.clone(),
             self.runtime_sell.clone(),
             self.in_flight_auto_sells.clone(),
             self.market_contexts.clone(),
@@ -426,7 +439,8 @@ impl AppEngine {
             self.keypair_bytes,
             self.wallet_pubkey,
             self.rpc_url.clone(),
-            self.local_mode,
+            self.send_target.clone(),
+            self.send_mode.clone(),
             self.runtime_sell.clone(),
             self.position_snapshots.clone(),
             self.market_contexts.clone(),
@@ -460,7 +474,7 @@ async fn process_exit_signal_with_tx(
     rpc_http: reqwest::Client,
     keypair_bytes: [u8; 64],
     rpc_url: String,
-    local_mode: bool,
+    send_target: SendTarget,
     runtime_sell: Arc<ParkingRwLock<SellConfig>>,
     in_flight_auto_sells: Arc<Mutex<HashMap<u64, mpsc::UnboundedSender<String>>>>,
     market_contexts: Arc<ParkingRwLock<HashMap<Pubkey, MarketContext>>>,
@@ -585,7 +599,7 @@ async fn process_exit_signal_with_tx(
             rpc_http,
             keypair_bytes,
             rpc_url,
-            local_mode,
+            send_target,
             mint_pubkey,
             position_id,
             sell_cfg,
@@ -640,7 +654,7 @@ async fn execute_auto_sell_with_refresh(
     rpc_http: reqwest::Client,
     keypair_bytes: [u8; 64],
     rpc_url: String,
-    local_mode: bool,
+    send_target: SendTarget,
     mint: Pubkey,
     position_id: u64,
     sell_cfg: SellConfig,
@@ -666,7 +680,7 @@ async fn execute_auto_sell_with_refresh(
                 &rpc_http,
                 &rpc_url,
                 &signed_tx,
-                local_mode,
+                &send_target,
                 Duration::from_secs(sell_cfg.confirm_timeout_sec),
             )
             .await
@@ -764,7 +778,8 @@ async fn trigger_manual_sell(
     keypair_bytes: [u8; 64],
     wallet_pubkey: Pubkey,
     rpc_url: String,
-    local_mode: bool,
+    send_target: SendTarget,
+    send_mode: String,
     runtime_sell: Arc<ParkingRwLock<SellConfig>>,
     position_snapshots: Arc<ParkingRwLock<HashMap<Pubkey, PositionSnapshot>>>,
     market_contexts: Arc<ParkingRwLock<HashMap<Pubkey, MarketContext>>>,
@@ -845,7 +860,8 @@ async fn trigger_manual_sell(
             mint,
             wallet_pubkey,
             rpc_url,
-            local_mode,
+            send_target,
+            send_mode,
             tokens,
             slippage_bps,
             confirm_timeout_sec,
@@ -890,7 +906,8 @@ async fn execute_manual_sell(
     mint: Pubkey,
     wallet_pubkey: Pubkey,
     rpc_url: String,
-    local_mode: bool,
+    send_target: SendTarget,
+    send_mode: String,
     tokens: u64,
     slippage_bps: u16,
     confirm_timeout_sec: u64,
@@ -902,6 +919,7 @@ async fn execute_manual_sell(
         tokens,
         slippage_bps,
         market_context.as_ref(),
+        &send_mode,
     )?;
 
     let unsigned_tx_b64 = exit_api
@@ -914,7 +932,7 @@ async fn execute_manual_sell(
         &rpc_http,
         &rpc_url,
         &signed_tx,
-        local_mode,
+        &send_target,
         Duration::from_secs(confirm_timeout_sec),
     )
     .await?;
@@ -951,6 +969,7 @@ fn build_manual_sell_request(
     amount_tokens: u64,
     slippage_bps: u16,
     market_context: Option<&MarketContext>,
+    send_mode: &str,
 ) -> Result<BuildSellTxRequest> {
     if amount_tokens == 0 {
         return Err(anyhow!("manual sell failed: amount_tokens must be > 0"));
@@ -963,8 +982,10 @@ fn build_manual_sell_request(
         slippage_bps: Some(slippage_bps),
         mode: None,
         output: Some(infer_manual_sell_output(market_context)),
-        referral_id: None,
+
         market_context: market_context.map(market_context_to_msg),
+        send_mode: Some(send_mode.to_string()),
+        tip_lamports: None,
     })
 }
 
@@ -1115,22 +1136,28 @@ async fn resolve_token_program(
     Ok(owner)
 }
 
-fn spawn_wallet_balance_fetch(rpc_http: reqwest::Client, rpc_url: String, wallet_pubkey: Pubkey) {
+fn spawn_wallet_balance_poller(rpc_http: reqwest::Client, rpc_url: String, wallet_pubkey: Pubkey) {
+    let poll = balance_poll_interval(&rpc_url);
     tokio::spawn(async move {
-        match fetch_wallet_balance(&rpc_http, &rpc_url, &wallet_pubkey).await {
-            Ok(lamports) => {
-                emit(AppEvent::BalanceUpdate { lamports });
-            }
-            Err(err) => {
-                warn!(event = "wallet_balance_fetch_error", error = %err);
+        let mut interval = tokio::time::interval(poll);
+        loop {
+            interval.tick().await;
+            match fetch_wallet_balance(&rpc_http, &rpc_url, &wallet_pubkey).await {
+                Ok(lamports) => {
+                    emit(AppEvent::BalanceUpdate { lamports });
+                }
+                Err(err) => {
+                    warn!(event = "wallet_balance_fetch_error", error = %err);
+                }
             }
         }
     });
 }
 
 fn spawn_usd1_balance_poller(rpc_http: reqwest::Client, rpc_url: String, wallet_pubkey: Pubkey) {
+    let poll = balance_poll_interval(&rpc_url);
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(5));
+        let mut interval = tokio::time::interval(poll);
         loop {
             interval.tick().await;
             match fetch_usd1_balance(&rpc_http, &rpc_url, &wallet_pubkey).await {
@@ -1277,7 +1304,7 @@ mod tests {
     #[test]
     fn manual_sell_request_serializes_output_and_slippage() {
         let request =
-            build_manual_sell_request(Pubkey::new_unique(), Pubkey::new_unique(), 42, 1200, None)
+            build_manual_sell_request(Pubkey::new_unique(), Pubkey::new_unique(), 42, 1200, None, "helius_sender")
                 .expect("build manual sell request");
         let serialized = serde_json::to_value(request).expect("serialize request");
 
@@ -1313,6 +1340,7 @@ mod tests {
             1,
             777,
             Some(&market_context),
+            "helius_sender",
         )
         .expect("build manual sell request");
         let serialized = serde_json::to_value(request).expect("serialize request");
