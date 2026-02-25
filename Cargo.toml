@@ -3,6 +3,11 @@ name = "lasersell"
 version = "0.3.0"
 edition = "2021"
 publish = true
+description = "Open-source Solana exit daemon with automated exits and real-time position monitoring"
+license = "MIT"
+homepage = "https://lasersell.io"
+repository = "https://github.com/lasersell/lasersell"
+documentation = "https://docs.lasersell.io"
 
 [features]
 default = []
