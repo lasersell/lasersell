@@ -395,22 +395,22 @@ jobs:
 
             on_macos do
               on_arm do
-                url "https://dl.lasersell.io/apt/binaries/lasersell/${VERSION}/lasersell_${VERSION}_darwin_arm64.tar.gz"
+                url "https://dl.lasersell.io/binaries/lasersell/${VERSION}/lasersell_${VERSION}_darwin_arm64.tar.gz"
                 sha256 "${SHA_DARWIN_ARM64}"
               end
               on_intel do
-                url "https://dl.lasersell.io/apt/binaries/lasersell/${VERSION}/lasersell_${VERSION}_darwin_amd64.tar.gz"
+                url "https://dl.lasersell.io/binaries/lasersell/${VERSION}/lasersell_${VERSION}_darwin_amd64.tar.gz"
                 sha256 "${SHA_DARWIN_AMD64}"
               end
             end
 
             on_linux do
               on_arm do
-                url "https://dl.lasersell.io/apt/binaries/lasersell/${VERSION}/lasersell_${VERSION}_linux_arm64.tar.gz"
+                url "https://dl.lasersell.io/binaries/lasersell/${VERSION}/lasersell_${VERSION}_linux_arm64.tar.gz"
                 sha256 "${SHA_LINUX_ARM64}"
               end
               on_intel do
-                url "https://dl.lasersell.io/apt/binaries/lasersell/${VERSION}/lasersell_${VERSION}_linux_amd64.tar.gz"
+                url "https://dl.lasersell.io/binaries/lasersell/${VERSION}/lasersell_${VERSION}_linux_amd64.tar.gz"
                 sha256 "${SHA_LINUX_AMD64}"
               end
             end
@@ -424,7 +424,7 @@ jobs:
             end
 
             livecheck do
-              url "https://dl.lasersell.io/apt/binaries/lasersell/latest.txt"
+              url "https://dl.lasersell.io/binaries/lasersell/latest.txt"
               regex(/(\d+\.\d+\.\d+)/)
             end
           end

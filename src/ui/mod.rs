@@ -32,6 +32,7 @@ pub async fn run_tui(
     config_path: PathBuf,
     mut event_rx: mpsc::UnboundedReceiver<AppEvent>,
     cmd_tx: mpsc::UnboundedSender<AppCommand>,
+    update_available: Option<String>,
 ) -> Result<()> {
     let _guard = TerminalGuard::new()?;
     let backend = CrosstermBackend::new(io::stdout());
@@ -42,6 +43,7 @@ pub async fn run_tui(
 
     let (mut input_rx, input_handle) = spawn_input_listener();
     let mut state = UiState::new(cfg, config_path);
+    state.update_available = update_available;
     if !(state.mouse_capture && matches!(state.focus, FocusPane::Sessions)) {
         let _ = execute!(io::stdout(), DisableMouseCapture);
     }

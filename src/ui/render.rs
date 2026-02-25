@@ -85,7 +85,7 @@ fn render_header(frame: &mut Frame, state: &UiState, area: Rect) {
         .map(|base_units| format!("{:.6}", usd1_base_to_unit(base_units as i128)))
         .unwrap_or_else(|| "--".to_string());
 
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::raw(" "),
         Span::raw(status_icon),
         Span::raw(" "),
@@ -105,7 +105,17 @@ fn render_header(frame: &mut Frame, state: &UiState, area: Rect) {
         Span::styled("  |  ", muted_style()),
         Span::styled(format!("{usd1_label} "), muted_style()),
         Span::styled(usd1_balance, Style::default().fg(TEXT)),
-    ]);
+    ];
+
+    if let Some(ref latest) = state.update_available {
+        spans.push(Span::styled("  |  ", muted_style()));
+        spans.push(Span::styled(
+            format!("Update available: {latest} \u{2191}"),
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    let line = Line::from(spans);
 
     let header = Paragraph::new(line).style(Style::default().fg(TEXT).bg(SCREEN_BG));
     frame.render_widget(header, area);

@@ -54,6 +54,11 @@ async fn async_main() -> Result<()> {
         }
         return Ok(());
     }
+
+    // Kick off version check in the background immediately — before wallet
+    // unlock so the user sees the banner while the passphrase prompt is up.
+    let update_check_handle = tokio::spawn(util::update_check::check_for_update());
+
     let use_tui = !(cli.verbose || cli.no_tui);
     let config_path = cli.config_path.clone();
     if let Err(err) = util::paths::ensure_data_dir_exists() {
@@ -128,6 +133,15 @@ async fn async_main() -> Result<()> {
         }
     };
 
+    // Collect the update check result. By now the background request has had
+    // plenty of time to complete (wallet unlock / onboarding happened first).
+    let update_available = update_check_handle.await.ok().flatten();
+    if let Some(ref update) = update_available {
+        util::update_check::print_update_banner(update);
+        // Brief pause so the banner is readable before the TUI clears the screen.
+        tokio::time::sleep(Duration::from_secs(3)).await;
+    }
+
     util::logging::init_redactions(vec![
         cfg.account.rpc_url.expose_secret().to_string(),
         cfg.account.api_key.expose_secret().to_string(),
@@ -181,6 +195,7 @@ async fn async_main() -> Result<()> {
             config_path.clone(),
             tui_event_rx.expect("tui event rx missing"),
             cmd_tx.clone(),
+            update_available.map(|u| u.latest),
         )
         .await;
         if tui_res.is_err() {

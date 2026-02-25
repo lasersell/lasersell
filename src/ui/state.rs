@@ -271,6 +271,7 @@ pub struct UiState {
     pub pending_confirm: Option<PendingConfirm>,
     pub should_quit: bool,
     pub details_expanded: bool,
+    pub update_available: Option<String>,
 }
 
 impl UiState {
@@ -309,6 +310,7 @@ impl UiState {
             pending_confirm: None,
             should_quit: false,
             details_expanded: false,
+            update_available: None,
         }
     }
 
