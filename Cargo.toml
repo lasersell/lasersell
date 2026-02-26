@@ -1,6 +1,6 @@
 [package]
 name = "lasersell"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 publish = true
 description = "Open-source Solana exit daemon with automated exits and real-time position monitoring"
@@ -25,7 +25,7 @@ clap = { version = "4", features = ["derive", "env"] }
 cliclack = "0.3"
 crossterm = "0.27"
 directories = "5"
-lasersell-sdk = "0.1"
+lasersell-sdk = "0.2"
 parking_lot = "0.12"
 rand = "0.8"
 ratatui = "0.27"

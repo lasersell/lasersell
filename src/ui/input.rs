@@ -267,7 +267,7 @@ fn help_lines() -> Vec<&'static str> {
         "  quit, exit, q",
         "  pause, resume",
         "  sell, s",
-        "  set tp <percent> | set sl <percent> | set slippage <percent> | set timeout <seconds>",
+        "  set tp <percent> | set sl <percent> | set ts <percent> | set slippage <percent> | set timeout <seconds> | set graduation <on|off>",
         "  clear",
     ]
 }
@@ -280,7 +280,7 @@ fn handle_set_command(
     if args.len() < 2 {
         state.push_output_reply(
             OutputLevel::Warn,
-            "Usage: set tp <percent> | set sl <percent> | set slippage <percent> | set timeout <seconds>",
+            "Usage: set tp <percent> | set sl <percent> | set ts <percent> | set slippage <percent> | set timeout <seconds> | set graduation <on|off>",
         );
         return;
     }
@@ -297,6 +297,9 @@ fn handle_set_command(
     let update_result = match key.as_str() {
         "tp" => StrategyAmount::parse_str(value).map(|parsed| cfg.strategy.target_profit = parsed),
         "sl" => StrategyAmount::parse_str(value).map(|parsed| cfg.strategy.stop_loss = parsed),
+        "ts" | "trailing" => {
+            StrategyAmount::parse_str(value).map(|parsed| cfg.strategy.trailing_stop = parsed)
+        }
         "slip" | "slippage" => {
             parse_percent_to_bps(value, "slippage").map(|parsed| cfg.sell.slippage_max_bps = parsed)
         }
@@ -304,6 +307,11 @@ fn handle_set_command(
             .parse::<u64>()
             .map(|parsed| cfg.strategy.deadline_timeout_sec = parsed)
             .map_err(|err| anyhow::anyhow!(err)),
+        "graduation" => match value.to_lowercase().as_str() {
+            "on" | "true" => Ok(cfg.strategy.sell_on_graduation = true),
+            "off" | "false" => Ok(cfg.strategy.sell_on_graduation = false),
+            _ => Err(anyhow::anyhow!("Expected on/off or true/false")),
+        },
         _ => Err(anyhow::anyhow!("Unknown set target.")),
     };
 

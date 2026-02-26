@@ -513,6 +513,8 @@ async fn smoke_stream_check(cfg: &config::Config) -> std::result::Result<(), Smo
     let strategy = StrategyConfigMsg {
         target_profit_pct: cfg.strategy.target_profit.percent_value(),
         stop_loss_pct: cfg.strategy.stop_loss.percent_value(),
+        trailing_stop_pct: cfg.strategy.trailing_stop.percent_value(),
+        sell_on_graduation: cfg.strategy.sell_on_graduation,
     };
     let mut configure = StreamConfigure::single_wallet(SMOKE_WALLET_PUBKEY.to_string(), strategy);
     configure.deadline_timeout_sec = cfg.strategy.deadline_timeout_sec;
@@ -559,6 +561,9 @@ async fn smoke_exit_api_check(cfg: &config::Config) -> std::result::Result<(), S
         market_context: None,
         send_mode: None,
         tip_lamports: None,
+        partner_fee_recipient: None,
+        partner_fee_bps: None,
+        partner_fee_lamports: None,
     };
 
     let response = timeout(Duration::from_secs(5), exit_api.build_sell_tx(&request))

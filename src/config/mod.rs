@@ -55,8 +55,13 @@ pub struct StrategyConfig {
     pub target_profit: StrategyAmount,
     /// Positive amount; if percent, it's based on detected buy amount.
     pub stop_loss: StrategyAmount,
+    #[serde(default = "default_trailing_stop")]
+    pub trailing_stop: StrategyAmount,
     #[serde(rename = "deadline_timeout")]
     pub deadline_timeout_sec: u64,
+    /// Automatically sell when a token graduates to a new DEX.
+    #[serde(default)]
+    pub sell_on_graduation: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -121,6 +126,10 @@ fn default_confirm_timeout_sec() -> u64 {
 #[cfg(not(feature = "devnet"))]
 fn default_confirm_timeout_sec() -> u64 {
     10
+}
+
+fn default_trailing_stop() -> StrategyAmount {
+    StrategyAmount::Percent(0.0)
 }
 
 fn default_secret_string() -> SecretString {
@@ -372,12 +381,18 @@ impl Config {
         }
         let _ = self.strategy.target_profit_units(None)?;
         let _ = self.strategy.stop_loss_units(None)?;
+        let _ = self.strategy.trailing_stop_units(None)?;
         let target_profit_pct = self.strategy.target_profit.percent_value();
         let stop_loss_pct = self.strategy.stop_loss.percent_value();
+        let trailing_stop_pct = self.strategy.trailing_stop.percent_value();
         let deadline_timeout_sec = self.strategy.deadline_timeout_sec;
-        if target_profit_pct <= 0.0 && stop_loss_pct <= 0.0 && deadline_timeout_sec == 0 {
+        if target_profit_pct <= 0.0
+            && stop_loss_pct <= 0.0
+            && trailing_stop_pct <= 0.0
+            && deadline_timeout_sec == 0
+        {
             return Err(anyhow!(
-                "at least one of strategy.target_profit, strategy.stop_loss, or strategy.deadline_timeout must be > 0"
+                "at least one of strategy.target_profit, strategy.stop_loss, strategy.trailing_stop, or strategy.deadline_timeout must be > 0"
             ));
         }
         Ok(())
@@ -433,6 +448,11 @@ impl StrategyConfig {
     pub fn stop_loss_units(&self, buy_quote_amount: Option<u64>) -> Result<Option<u64>> {
         self.stop_loss
             .to_base_units(buy_quote_amount, "strategy.stop_loss")
+    }
+
+    pub fn trailing_stop_units(&self, buy_quote_amount: Option<u64>) -> Result<Option<u64>> {
+        self.trailing_stop
+            .to_base_units(buy_quote_amount, "strategy.trailing_stop")
     }
 }
 

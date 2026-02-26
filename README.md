@@ -14,6 +14,7 @@
 
 <p align="center">
   <a href="https://crates.io/crates/lasersell"><img alt="crates.io" src="https://img.shields.io/crates/v/lasersell.svg"></a>
+  <a href="https://hub.docker.com/r/lasersell/lasersell"><img alt="Docker" src="https://img.shields.io/docker/v/lasersell/lasersell?label=docker&logo=docker"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
   <br>
   <a href="https://discord.gg/lasersell"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white"></a>
@@ -24,7 +25,7 @@
 
 ## What is LaserSell?
 
-LaserSell is an open-source CLI daemon that automatically sells Solana tokens when your exit conditions are met. It connects to the Exit Intelligence stream, a server-side position monitor that watches your holdings in real time and delivers ready-to-sign exit transactions the moment your take-profit, stop-loss, or deadline triggers.
+LaserSell is an open-source CLI daemon that automatically sells Solana tokens when your exit conditions are met. It connects to the Exit Intelligence stream, a server-side position monitor that watches your holdings in real time and delivers ready-to-sign exit transactions the moment your take-profit, stop-loss, trailing-stop, or deadline triggers.
 
 You configure your strategy, LaserSell runs in your terminal (or headless on a server), and exits execute automatically.
 
@@ -52,10 +53,10 @@ This is fundamentally different from bots that poll a price API and then build a
 
 ## What can you do with the LaserSell CLI?
 
-- **Automated exit strategies.** Set take-profit, stop-loss, and deadline timeout. LaserSell auto-sells when any condition is met. Buy a token in any supported DEX, and LaserSell picks it up automatically.
+- **Automated exit strategies.** Set take-profit, stop-loss, trailing stop, deadline timeout, and sell-on-graduation. LaserSell auto-sells when any condition is met. Buy a token in any supported DEX, and LaserSell picks it up automatically.
 - **Live terminal dashboard.** Real-time PnL tracking, session status, strategy controls, and a built-in command prompt.
 - **Headless server deployments.** Run with `--no-tui` on a VPS for always-on operation with plain log output.
-- **On-the-fly strategy changes.** Adjust take-profit, stop-loss, slippage, and timeout from the TUI command pane. Changes apply immediately and persist to disk.
+- **On-the-fly strategy changes.** Adjust take-profit, stop-loss, trailing stop, slippage, and timeout from the TUI command pane. Changes apply immediately and persist to disk.
 - **Adaptive slippage.** Slippage starts at your configured baseline and bumps automatically on retries, up to a hard cap you control.
 
 ## Installation
@@ -81,7 +82,7 @@ lasersell --setup
 The wizard walks you through:
 - Connecting your Solana RPC endpoint
 - Entering your LaserSell API key
-- Setting your default strategy (take-profit, stop-loss, deadline, slippage)
+- Setting your default strategy (take-profit, stop-loss, trailing stop, deadline, slippage)
 - Creating or importing a wallet (seed phrase, Solana JSON keypair, or base58 secret key)
 
 Config and keystore are saved to `~/.lasersell/`.
@@ -101,7 +102,9 @@ Inside the TUI, press `Tab` to switch to the command pane:
 ```
 set tp 20%          # change take-profit to 20%
 set sl 5%           # set stop-loss to 5%
+set ts 3%           # set trailing stop to 3%
 set timeout 60      # force-sell after 60 seconds
+set graduation on   # auto-sell when token graduates to a new DEX
 sell                 # manually sell the selected position
 pause / resume       # pause or resume new sessions
 ?                    # show all commands
@@ -117,9 +120,11 @@ account:
   api_key: "your-lasersell-api-key"
 
 strategy:
-  target_profit: "10%"       # take-profit as % of buy amount
-  stop_loss: "0%"            # 0% disables stop-loss
-  deadline_timeout: 30       # force-sell after N seconds (0 disables)
+  target_profit: "20%"       # take-profit as % of buy amount
+  stop_loss: "10%"           # stop-loss as % of buy amount (0% disables)
+  trailing_stop: "5%"        # exit when profit drops this % of entry from peak (0% disables)
+  deadline_timeout: 120      # force-sell after N seconds (0 disables)
+  sell_on_graduation: false   # auto-sell when token graduates to a new DEX (e.g. Pump.fun -> PumpSwap)
 
 sell:
   slippage_pad_bps: 2000     # base slippage (basis points)

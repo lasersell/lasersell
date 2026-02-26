@@ -228,8 +228,10 @@ impl RpcMetrics {
 pub struct ExitCounts {
     pub target: u64,
     pub stop_loss: u64,
+    pub trailing_stop: u64,
     pub timeout: u64,
     pub manual: u64,
+    pub graduation: u64,
     pub other: u64,
 }
 
@@ -729,8 +731,10 @@ impl UiState {
         match reason {
             "target" | "profit" => self.exit_counts.target += 1,
             "stop_loss" => self.exit_counts.stop_loss += 1,
+            "trailing_stop" => self.exit_counts.trailing_stop += 1,
             "timeout" => self.exit_counts.timeout += 1,
             "manual" => self.exit_counts.manual += 1,
+            "graduation" => self.exit_counts.graduation += 1,
             _ => self.exit_counts.other += 1,
         }
     }

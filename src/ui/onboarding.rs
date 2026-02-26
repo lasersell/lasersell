@@ -106,9 +106,12 @@ struct StrategyInputs {
     target_profit_enabled: bool,
     stop_loss: StrategyAmount,
     stop_loss_enabled: bool,
+    trailing_stop: StrategyAmount,
+    trailing_stop_enabled: bool,
     sell_timeout_sec: u64,
     timeout_enabled: bool,
     slippage_max_bps: u16,
+    sell_on_graduation: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -120,9 +123,12 @@ struct ConfigInputs {
     target_profit_enabled: bool,
     stop_loss: StrategyAmount,
     stop_loss_enabled: bool,
+    trailing_stop: StrategyAmount,
+    trailing_stop_enabled: bool,
     sell_timeout_sec: u64,
     timeout_enabled: bool,
     slippage_max_bps: u16,
+    sell_on_graduation: bool,
 }
 
 pub fn run_onboarding(config_path: &Path) -> Result<(Config, Keypair)> {
@@ -157,18 +163,24 @@ fn run_onboarding_inner(config_path: &Path) -> Result<(Config, Keypair)> {
         target_profit_enabled,
         stop_loss,
         stop_loss_enabled,
+        trailing_stop,
+        trailing_stop_enabled,
         sell_timeout_sec,
         timeout_enabled,
         slippage_max_bps,
+        sell_on_graduation,
     } = if use_recommended {
         let defaults = StrategyInputs {
             target_profit: StrategyAmount::Percent(6.0),
             target_profit_enabled: true,
             stop_loss: StrategyAmount::Percent(10.0),
             stop_loss_enabled: true,
+            trailing_stop: StrategyAmount::Percent(0.0),
+            trailing_stop_enabled: false,
             sell_timeout_sec: 120,
             timeout_enabled: true,
             slippage_max_bps: 2000,
+            sell_on_graduation: false,
         };
         let slippage_label = format_bps_percent(defaults.slippage_max_bps);
         let target_profit_label = format_strategy_amount(&defaults.target_profit);
@@ -283,9 +295,12 @@ fn run_onboarding_inner(config_path: &Path) -> Result<(Config, Keypair)> {
         target_profit_enabled,
         stop_loss,
         stop_loss_enabled,
+        trailing_stop,
+        trailing_stop_enabled,
         sell_timeout_sec,
         timeout_enabled,
         slippage_max_bps,
+        sell_on_graduation,
     };
 
     // ── Review ─────────────────────────────────────────────────────────
@@ -610,7 +625,7 @@ fn prompt_api_key() -> Result<String> {
 }
 
 fn prompt_strategy_inputs() -> Result<StrategyInputs> {
-    let (target_profit, target_profit_enabled, stop_loss, stop_loss_enabled, sell_timeout_sec, timeout_enabled) = loop {
+    let (target_profit, target_profit_enabled, stop_loss, stop_loss_enabled, trailing_stop, trailing_stop_enabled, sell_timeout_sec, timeout_enabled) = loop {
         let tp_enabled: bool = cliclack::confirm("Enable Target Profit?")
             .initial_value(true)
             .interact()?;
@@ -629,6 +644,15 @@ fn prompt_strategy_inputs() -> Result<StrategyInputs> {
             StrategyAmount::Percent(0.0)
         };
 
+        let ts_enabled: bool = cliclack::confirm("Enable Trailing Stop?")
+            .initial_value(false)
+            .interact()?;
+        let ts = if ts_enabled {
+            prompt_strategy_amount("Trailing Stop (% of buy)", "5%", false)?
+        } else {
+            StrategyAmount::Percent(0.0)
+        };
+
         let to_enabled: bool = cliclack::confirm("Enable Deadline Timeout?")
             .initial_value(true)
             .interact()?;
@@ -638,26 +662,33 @@ fn prompt_strategy_inputs() -> Result<StrategyInputs> {
             0
         };
 
-        if !tp_enabled && !sl_enabled && !to_enabled {
+        if !tp_enabled && !sl_enabled && !ts_enabled && !to_enabled {
             cliclack::log::warning(
-                "At least one of Target Profit, Stop Loss, or Deadline Timeout must be enabled.",
+                "At least one of Target Profit, Stop Loss, Trailing Stop, or Deadline Timeout must be enabled.",
             )?;
             continue;
         }
 
-        break (tp, tp_enabled, sl, sl_enabled, to_sec, to_enabled);
+        break (tp, tp_enabled, sl, sl_enabled, ts, ts_enabled, to_sec, to_enabled);
     };
 
     let slippage_max_bps = prompt_slippage_percent("Slippage Tolerance (%)", "20%")?;
+
+    let sell_on_graduation: bool = cliclack::confirm("Auto-sell when token graduates to a new DEX?")
+        .initial_value(false)
+        .interact()?;
 
     Ok(StrategyInputs {
         target_profit,
         target_profit_enabled,
         stop_loss,
         stop_loss_enabled,
+        trailing_stop,
+        trailing_stop_enabled,
         sell_timeout_sec,
         timeout_enabled,
         slippage_max_bps,
+        sell_on_graduation,
     })
 }
 
@@ -781,7 +812,9 @@ fn build_config(inputs: &ConfigInputs, keystore_path: &Path) -> Result<Config> {
         strategy: StrategyConfig {
             target_profit: inputs.target_profit.clone(),
             stop_loss: inputs.stop_loss.clone(),
+            trailing_stop: inputs.trailing_stop.clone(),
             deadline_timeout_sec: inputs.sell_timeout_sec,
+            sell_on_graduation: inputs.sell_on_graduation,
         },
         sell: SellConfig {
             slippage_max_bps: inputs.slippage_max_bps,
@@ -806,13 +839,18 @@ fn build_summary_text(
     } else {
         "disabled".to_string()
     };
+    let trailing_stop = if inputs.trailing_stop_enabled {
+        format_strategy_amount(&inputs.trailing_stop)
+    } else {
+        "disabled".to_string()
+    };
     let deadline_label = if inputs.timeout_enabled {
         format!("{}s", inputs.sell_timeout_sec)
     } else {
         "disabled".to_string()
     };
     format!(
-        "Strategy: Take Profit {target_profit}, Stop Loss {stop_loss}, Deadline {deadline_label}\n\
+        "Strategy: Take Profit {target_profit}, Stop Loss {stop_loss}, Trailing Stop {trailing_stop}, Deadline {deadline_label}\n\
          RPC: {}\n\
          API Key: [configured]\n\
          Local Mode: {}\n\

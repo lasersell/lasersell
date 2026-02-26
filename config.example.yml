@@ -1,28 +1,43 @@
 account:
-  # Optional env overrides:
-  # - LASERSELL_KEYPAIR_PATH
-  # - LASERSELL_RPC_URL (or LASERSELL_PRIVATE_RPC_URL)
-  # - LASERSELL_API_KEY
-  keypair_path: "/abs/path/wallet.keystore.json" # default: ~/.lasersell/wallet.keystore.json; encrypted Lasersell keystore (recommended); legacy Solana keypair JSON also supported
-  # false: production endpoints (wss://stream.lasersell.io/v1/ws, https://api.lasersell.io)
-  # true: local endpoints (ws://localhost:8082/v1/ws, http://localhost:8080)
-  local: false
-  # https:// recommended; http:// allowed only for localhost/private RPC endpoints
-  rpc_url: "https://example-rpc.yourdomain.com"
+  # Path to your encrypted LaserSell keystore (recommended) or legacy Solana keypair JSON.
+  # Default: ~/.lasersell/wallet.keystore.json
+  # Override: LASERSELL_KEYPAIR_PATH env var
+  keypair_path: "~/.lasersell/wallet.keystore.json"
+
+  # LaserSell API key (get one free at https://app.lasersell.io)
+  # Override: LASERSELL_API_KEY env var
   api_key: "your-lasersell-api-key"
 
+  # Private RPC endpoint (https:// required for production).
+  # Free tiers available from Helius (helius.dev) and Chainstack (chainstack.com).
+  # Override: LASERSELL_RPC_URL or LASERSELL_PRIVATE_RPC_URL env var
+  rpc_url: "https://your-private-rpc.example.com"
+
+  # Transaction submission target: "helius_sender" (default), "astralane", or "rpc".
+  # Override: LASERSELL_SEND_TARGET env var
+  # send_target: "helius_sender"
+
+  # Required when send_target is "astralane".
+  # Override: LASERSELL_ASTRALANE_API_KEY env var
+  # astralane_api_key: "your-astralane-api-key"
+
+  # Set to true for local development (uses ws://localhost endpoints).
+  local: false
+
 strategy:
-  # Use a percent string based on the detected buy amount.
-  # Examples: target_profit: "10%"; stop_loss: "0.5%".
-  # Set stop_loss to 0% to disable it.
-  target_profit: "10%"        # take profit as percent of buy
-  stop_loss: "0%"             # stop loss as percent of buy (0% disables)
-  deadline_timeout: 30        # force sell-all after N seconds (0 disables)
+  # All values are percent of detected buy amount. Use "0%" to disable.
+  # At least one of target_profit, stop_loss, trailing_stop, or deadline_timeout must be > 0.
+
+  target_profit: "20%"       # take profit — exit when profit reaches this % of entry
+  stop_loss: "10%"           # stop loss — exit when loss reaches this % of entry
+  trailing_stop: "5%"        # trailing stop — track peak profit, exit when it drops this % of entry from peak
+  deadline_timeout: 120      # force exit after N seconds (0 disables)
+  sell_on_graduation: false   # auto-sell when token graduates to a new DEX (e.g. Pump.fun -> PumpSwap)
 
 sell:
-  slippage_pad_bps: 2000               # extra slippage added on top of computed value
-  slippage_retry_bump_bps_first: 20    # extra pad added after first slippage error
-  slippage_retry_bump_bps_next: 40     # extra pad added after subsequent slippage errors
-  slippage_max_bps: 2500               # max slippage in basis points
-  confirm_timeout_sec: 25              # devnet default (mainnet default is 10)
+  slippage_pad_bps: 2000               # extra slippage added on top of computed value (bps)
+  slippage_retry_bump_bps_first: 20    # extra pad after first slippage error
+  slippage_retry_bump_bps_next: 40     # extra pad after subsequent slippage errors
+  slippage_max_bps: 2500               # max slippage cap (bps)
+  confirm_timeout_sec: 10              # tx confirmation timeout (25 on devnet)
   max_retries: 2                       # retry count for failed sells

@@ -986,6 +986,9 @@ fn build_manual_sell_request(
         market_context: market_context.map(market_context_to_msg),
         send_mode: Some(send_mode.to_string()),
         tip_lamports: None,
+        partner_fee_recipient: None,
+        partner_fee_bps: None,
+        partner_fee_lamports: None,
     })
 }
 
@@ -1038,6 +1041,8 @@ fn strategy_to_msg(strategy: &StrategyConfig) -> StrategyConfigMsg {
     StrategyConfigMsg {
         target_profit_pct: strategy.target_profit.percent_value(),
         stop_loss_pct: strategy.stop_loss.percent_value(),
+        trailing_stop_pct: strategy.trailing_stop.percent_value(),
+        sell_on_graduation: strategy.sell_on_graduation,
     }
 }
 
