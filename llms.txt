@@ -1,0 +1,81 @@
+# LaserSell CLI
+
+> Open-source Solana exit daemon. Automated exits. Real-time position monitoring. Non-custodial.
+
+LaserSell is a CLI daemon that automatically sells Solana tokens when your exit conditions are met. It connects to the Exit Intelligence stream, a server-side position monitor that watches your holdings in real time and delivers ready-to-sign exit transactions the moment your triggers fire.
+
+## What the CLI does
+
+- Monitors your Solana positions in real time via the Exit Intelligence WebSocket stream
+- Auto-sells when exit conditions are met (take-profit, stop-loss, trailing stop, deadline timeout, sell-on-graduation)
+- Signs transactions locally (non-custodial — private keys never leave your machine)
+- Submits via configurable backends: Helius Sender (default), Astralane, or direct RPC
+- Live terminal dashboard (TUI) with real-time PnL, session status, and interactive controls
+- Headless server mode (--no-tui) for always-on VPS deployment
+
+## Supported DEXs
+
+Pump.fun, PumpSwap, Raydium (Launchpad, CPMM), Meteora (DBC, DAMM v2), Bags.fm. SOL and USD1 quote currencies.
+
+## Exit strategies
+
+- **Take-profit**: exit when profit reaches a configured % of entry
+- **Stop-loss**: exit when loss reaches a configured % of entry
+- **Trailing stop**: track peak profit, exit when it drops a configured % from peak
+- **Deadline timeout**: force-sell after N seconds
+- **Sell-on-graduation**: auto-sell when a token graduates to a new DEX (e.g. Pump.fun -> PumpSwap)
+
+All strategies can be combined. At least one must be active.
+
+## Installation
+
+```
+curl -fsSL https://dl.lasersell.io/install.sh | sh
+```
+
+Supports macOS, Linux, Windows (WSL), and Raspberry Pi.
+
+## Quick start
+
+1. Get a free API key at https://app.lasersell.io/auth/sign-up
+2. Run `lasersell --setup` (interactive wizard for RPC, API key, strategy, wallet)
+3. Run `lasersell` to start the daemon
+
+## Configuration
+
+Config lives at `~/.lasersell/config.yml`. Key sections:
+
+- `account`: RPC endpoint, API key, keypair path, send target
+- `strategy`: target_profit, stop_loss, trailing_stop, deadline_timeout, sell_on_graduation
+- `sell`: slippage settings, retry count, confirm timeout
+
+Override with `-f path/to/config.yml` or environment variables (LASERSELL_RPC_URL, LASERSELL_API_KEY, etc.).
+
+## TUI commands
+
+Press Tab to switch to the command pane:
+- `set tp 20%` — change take-profit
+- `set sl 5%` — change stop-loss
+- `set ts 3%` — change trailing stop
+- `set timeout 60` — change deadline
+- `set graduation on/off` — toggle sell-on-graduation
+- `sell` — manually sell selected position
+- `pause` / `resume` — pause or resume new sessions
+
+## Security
+
+- Encrypted keystore: Argon2id key derivation + XChaCha20-Poly1305 authenticated encryption
+- Log redaction: RPC URLs, API keys, auth headers scrubbed from all output
+- Memory safety: sensitive data zeroized after use
+- Fully open source (MIT license)
+
+## Links
+
+- Website: https://lasersell.io
+- Dashboard & API keys: https://app.lasersell.io
+- Documentation: https://docs.lasersell.io
+- CLI repo: https://github.com/lasersell/lasersell
+- SDK repo: https://github.com/lasersell/lasersell-sdk
+- Discord: https://discord.gg/lasersell
+- Twitter: https://x.com/lasersellhq
+- Security: https://www.lasersell.io/security
