@@ -31,13 +31,13 @@ strategy:
   target_profit: "20%"       # take profit — exit when profit reaches this % of entry
   stop_loss: "10%"           # stop loss — exit when loss reaches this % of entry
   trailing_stop: "5%"        # trailing stop — track peak profit, exit when it drops this % of entry from peak
-  deadline_timeout: 120      # force exit after N seconds (0 disables)
+  deadline_timeout: 0        # force exit after N seconds (0 disables)
   sell_on_graduation: false   # auto-sell when token graduates to a new DEX (e.g. Pump.fun -> PumpSwap)
 
 sell:
-  slippage_pad_bps: 2000               # extra slippage added on top of computed value (bps)
+  slippage_pad_bps: 2500               # extra slippage added on top of computed value (bps)
   slippage_retry_bump_bps_first: 20    # extra pad after first slippage error
   slippage_retry_bump_bps_next: 40     # extra pad after subsequent slippage errors
-  slippage_max_bps: 2500               # max slippage cap (bps)
+  slippage_max_bps: 3000               # max slippage cap (bps)
   confirm_timeout_sec: 10              # tx confirmation timeout (25 on devnet)
-  max_retries: 2                       # retry count for failed sells
+  max_retries: 3                       # retry count for failed sells

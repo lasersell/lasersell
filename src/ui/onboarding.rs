@@ -175,11 +175,11 @@ fn run_onboarding_inner(config_path: &Path) -> Result<(Config, Keypair)> {
             target_profit_enabled: true,
             stop_loss: StrategyAmount::Percent(10.0),
             stop_loss_enabled: true,
-            trailing_stop: StrategyAmount::Percent(0.0),
-            trailing_stop_enabled: false,
-            sell_timeout_sec: 120,
-            timeout_enabled: true,
-            slippage_max_bps: 2000,
+            trailing_stop: StrategyAmount::Percent(5.0),
+            trailing_stop_enabled: true,
+            sell_timeout_sec: 0,
+            timeout_enabled: false,
+            slippage_max_bps: 3000,
             sell_on_graduation: false,
         };
         let slippage_label = format_bps_percent(defaults.slippage_max_bps);
@@ -403,13 +403,14 @@ fn run_onboarding_inner(config_path: &Path) -> Result<(Config, Keypair)> {
 }
 
 fn prompt_wallet() -> Result<WalletSelection> {
-    let import: bool = cliclack::confirm("Import an existing wallet?")
-        .initial_value(false)
+    let create_new: bool = cliclack::select("Wallet setup")
+        .item(true, "Create a new wallet", "Generate a fresh keypair")
+        .item(false, "Import an existing wallet", "Seed phrase, private key, or JSON file")
         .interact()?;
-    if import {
-        prompt_import_wallet()
-    } else {
+    if create_new {
         prompt_create_wallet()
+    } else {
+        prompt_import_wallet()
     }
 }
 

@@ -123,13 +123,13 @@ strategy:
   target_profit: "20%"       # take-profit as % of buy amount
   stop_loss: "10%"           # stop-loss as % of buy amount (0% disables)
   trailing_stop: "5%"        # exit when profit drops this % of entry from peak (0% disables)
-  deadline_timeout: 120      # force-sell after N seconds (0 disables)
+  deadline_timeout: 0        # force-sell after N seconds (0 disables)
   sell_on_graduation: false   # auto-sell when token graduates to a new DEX (e.g. Pump.fun -> PumpSwap)
 
 sell:
-  slippage_pad_bps: 2000     # base slippage (basis points)
-  slippage_max_bps: 2500     # hard cap
-  max_retries: 2
+  slippage_pad_bps: 2500     # base slippage (basis points)
+  slippage_max_bps: 3000     # hard cap
+  max_retries: 3
 ```
 
 See [`config.example.yml`](config.example.yml) for all options with inline documentation.
