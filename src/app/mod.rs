@@ -130,8 +130,13 @@ impl AppEngine {
         let send_target = cfg.resolve_send_target()?;
         let send_mode = cfg.send_mode_str().to_string();
 
-        spawn_wallet_balance_poller(rpc_http.clone(), rpc_url.clone(), wallet_pubkey);
-        spawn_usd1_balance_poller(rpc_http.clone(), rpc_url.clone(), wallet_pubkey);
+        let balance_http = reqwest::Client::builder()
+            .no_proxy()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(10))
+            .build()?;
+        spawn_wallet_balance_poller(balance_http.clone(), rpc_url.clone(), wallet_pubkey);
+        spawn_usd1_balance_poller(balance_http, rpc_url.clone(), wallet_pubkey);
 
         let exit_api = Arc::new(build_exit_api_client(
             &cfg.account.api_key,
@@ -1213,27 +1218,22 @@ async fn fetch_usd1_balance(
     rpc_url: &str,
     wallet_pubkey: &Pubkey,
 ) -> Result<u64> {
-    let mut total = 0u64;
-    let programs = [spl_token::id(), spl_token_2022::id()];
-    for program_id in programs {
-        let result = rpc_result(
-            client,
-            rpc_url,
-            "getTokenAccountsByOwner",
-            serde_json::json!([
-                wallet_pubkey.to_string(),
-                { "programId": program_id.to_string() },
-                { "encoding": "base64" }
-            ]),
-        )
-        .await?;
-        total = total.saturating_add(parse_token_accounts_for_mint(
-            &result,
-            *wallet_pubkey,
-            usd1_mint(),
-        ));
-    }
-    Ok(total)
+    let result = rpc_result(
+        client,
+        rpc_url,
+        "getTokenAccountsByOwner",
+        serde_json::json!([
+            wallet_pubkey.to_string(),
+            { "mint": usd1_mint().to_string() },
+            { "encoding": "base64" }
+        ]),
+    )
+    .await?;
+    Ok(parse_token_accounts_for_mint(
+        &result,
+        *wallet_pubkey,
+        usd1_mint(),
+    ))
 }
 
 fn parse_token_accounts_for_mint(result: &serde_json::Value, owner: Pubkey, mint: Pubkey) -> u64 {
