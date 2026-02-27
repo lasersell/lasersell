@@ -55,6 +55,7 @@ pub fn handle_key_event(
 
     if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
         let _ = cmd_tx.send(AppCommand::Quit);
+        state.should_quit = true;
         state.push_output_reply(OutputLevel::Info, "Quitting...");
         return;
     }
@@ -100,6 +101,11 @@ fn handle_sessions_key(
                 "Resumed new sessions."
             };
             state.push_output_reply(OutputLevel::Info, msg);
+        }
+        KeyCode::Char('q') => {
+            let _ = cmd_tx.send(AppCommand::Quit);
+            state.should_quit = true;
+            state.push_output_reply(OutputLevel::Info, "Quitting...");
         }
         _ => {}
     }
@@ -218,6 +224,7 @@ fn execute_command(
         }
         "quit" | "exit" | "q" => {
             let _ = cmd_tx.send(AppCommand::Quit);
+            state.should_quit = true;
             state.push_output_reply(OutputLevel::Info, "Quitting...");
         }
         "pause" => {

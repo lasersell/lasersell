@@ -78,6 +78,9 @@ pub async fn run_tui(
                         crossterm::event::Event::Key(key) => {
                             handle_key_event(key, &mut state, &cmd_tx);
                             should_draw = true;
+                            if state.should_quit {
+                                break;
+                            }
                         }
                         crossterm::event::Event::Mouse(mouse) => {
                             if state.mouse_capture && matches!(state.focus, FocusPane::Sessions) {
