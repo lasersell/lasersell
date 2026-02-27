@@ -17,8 +17,6 @@ jobs:
           RELEASE_BODY: ${{ github.event.release.body }}
           RELEASE_URL: ${{ github.event.release.html_url }}
         run: |
-          # Build the message in HTML format to avoid Markdown escaping issues
-          # with release notes that may contain special characters.
           MESSAGE="<b>🚀 LaserSell ${RELEASE_TAG}</b>"
 
           if [ -n "${RELEASE_NAME}" ] && [ "${RELEASE_NAME}" != "${RELEASE_TAG}" ]; then
@@ -26,11 +24,20 @@ jobs:
           fi
 
           if [ -n "${RELEASE_BODY}" ]; then
-            # Escape HTML entities in release body
-            ESCAPED_BODY=$(echo "${RELEASE_BODY}" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+            # Strip markdown syntax, then escape HTML entities
+            CLEAN_BODY=$(echo "${RELEASE_BODY}" | sed \
+              -e 's/^###* *//' \
+              -e 's/\*\*\([^*]*\)\*\*/\1/g' \
+              -e 's/\*\([^*]*\)\*/\1/g' \
+              -e 's/\[\([^]]*\)\]([^)]*)/\1/g' \
+              -e 's/ *($//' \
+              -e 's/^- /• /g' \
+              -e 's/&/\&amp;/g' \
+              -e 's/</\&lt;/g' \
+              -e 's/>/\&gt;/g')
             MESSAGE="${MESSAGE}
 
-          ${ESCAPED_BODY}"
+          ${CLEAN_BODY}"
           fi
 
           MESSAGE="${MESSAGE}
