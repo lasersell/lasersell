@@ -21,6 +21,10 @@
   <a href="https://x.com/lasersellhq"><img alt="X (Twitter)" src="https://img.shields.io/twitter/follow/lasersellhq?style=flat&logo=x&color=000000"></a>
 </p>
 
+<p align="center">
+  <img alt="LaserSell TUI" src="lasersell-tui.png" width="700">
+</p>
+
 ---
 
 ## What is LaserSell?
