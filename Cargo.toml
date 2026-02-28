@@ -1,6 +1,6 @@
 [package]
 name = "lasersell"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 publish = true
 description = "Open-source Solana exit daemon with automated exits and real-time position monitoring"
@@ -39,7 +39,6 @@ solana-derivation-path = "3.0.0"
 solana-sdk = "=3.0.0"
 spl-token = { version = "9", features = ["no-entrypoint"] }
 spl-token-interface = "2"
-spl-token-2022 = { version = "10", features = ["no-entrypoint"] }
 time = { version = "0.3", features = ["macros", "formatting", "parsing"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync", "net", "test-util"] }
 tracing = "0.1"

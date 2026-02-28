@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use lasersell_sdk::exit_api::{
     BuildSellTxRequest, ExitApiClient, ExitApiClientOptions, SellOutput,
 };
@@ -12,7 +11,6 @@ use lasersell_sdk::stream::proto::{MarketContextMsg, StrategyConfigMsg};
 use lasersell_sdk::tx::{SendTarget, TxSubmitError};
 use parking_lot::RwLock as ParkingRwLock;
 use secrecy::{ExposeSecret, SecretString};
-use solana_sdk::program_pack::Pack;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
 use tokio::sync::{mpsc, Mutex};
@@ -30,7 +28,7 @@ use crate::tx::{send_tx, sign_unsigned_tx};
 const HEARTBEAT_INTERVAL_SECS: u64 = 1;
 const AUTOSELL_REFRESH_TIMEOUT_MS: u64 = 1_500;
 const BALANCE_POLL_SECS: u64 = 5;
-const BALANCE_POLL_PUBLIC_RPC_SECS: u64 = 60;
+const BALANCE_POLL_PUBLIC_RPC_SECS: u64 = 15;
 
 fn balance_poll_interval(rpc_url: &str) -> Duration {
     if rpc_url.trim().contains("api.mainnet-beta.solana.com") {
@@ -1146,6 +1144,21 @@ async fn resolve_token_program(
     Ok(owner)
 }
 
+/// Derive the Associated Token Account address for a wallet + mint.
+fn derive_ata(wallet: &Pubkey, mint: &Pubkey) -> Pubkey {
+    // ATA PDA: seeds = [wallet, token_program, mint], program = ATA program
+    const ATA_PROGRAM: Pubkey = solana_sdk::pubkey!("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+    let (ata, _bump) = Pubkey::find_program_address(
+        &[
+            wallet.as_ref(),
+            spl_token::id().as_ref(),
+            mint.as_ref(),
+        ],
+        &ATA_PROGRAM,
+    );
+    ata
+}
+
 fn spawn_wallet_balance_poller(rpc_http: reqwest::Client, rpc_url: String, wallet_pubkey: Pubkey) {
     let poll = balance_poll_interval(&rpc_url);
     tokio::spawn(async move {
@@ -1166,11 +1179,12 @@ fn spawn_wallet_balance_poller(rpc_http: reqwest::Client, rpc_url: String, walle
 
 fn spawn_usd1_balance_poller(rpc_http: reqwest::Client, rpc_url: String, wallet_pubkey: Pubkey) {
     let poll = balance_poll_interval(&rpc_url);
+    let usd1_ata = derive_ata(&wallet_pubkey, &usd1_mint());
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(poll);
         loop {
             interval.tick().await;
-            match fetch_usd1_balance(&rpc_http, &rpc_url, &wallet_pubkey).await {
+            match fetch_usd1_balance(&rpc_http, &rpc_url, &usd1_ata).await {
                 Ok(base_units) => {
                     emit(AppEvent::Usd1BalanceUpdate { base_units });
                 }
@@ -1206,90 +1220,32 @@ async fn fetch_wallet_balance(
         .ok_or_else(|| anyhow!("wallet balance missing"))
 }
 
-#[derive(Clone, Debug)]
-struct TokenAccountInfo {
-    mint: Pubkey,
-    owner: Pubkey,
-    amount: u64,
-}
-
 async fn fetch_usd1_balance(
     client: &reqwest::Client,
     rpc_url: &str,
-    wallet_pubkey: &Pubkey,
+    ata: &Pubkey,
 ) -> Result<u64> {
     let result = rpc_result(
         client,
         rpc_url,
-        "getTokenAccountsByOwner",
-        serde_json::json!([
-            wallet_pubkey.to_string(),
-            { "mint": usd1_mint().to_string() },
-            { "encoding": "base64" }
-        ]),
+        "getTokenAccountBalance",
+        serde_json::json!([ata.to_string()]),
     )
-    .await?;
-    Ok(parse_token_accounts_for_mint(
-        &result,
-        *wallet_pubkey,
-        usd1_mint(),
-    ))
-}
+    .await;
 
-fn parse_token_accounts_for_mint(result: &serde_json::Value, owner: Pubkey, mint: Pubkey) -> u64 {
-    let Some(entries) = result.get("value").and_then(|value| value.as_array()) else {
-        return 0;
-    };
-    let mut total = 0u64;
-    for entry in entries {
-        let data_b64 = entry
-            .get("account")
-            .and_then(|value| value.get("data"))
-            .and_then(|data| data.get(0))
-            .and_then(|value| value.as_str())
-            .or_else(|| {
-                entry
-                    .get("data")
-                    .and_then(|data| data.get(0))
-                    .and_then(|value| value.as_str())
-            });
-        let Some(data_b64) = data_b64 else {
-            continue;
-        };
-        let data = match BASE64_STANDARD.decode(data_b64) {
-            Ok(bytes) => bytes,
-            Err(_) => continue,
-        };
-        let Some(info) = decode_token_account(&data) else {
-            continue;
-        };
-        if info.owner != owner || info.mint != mint {
-            continue;
+    match result {
+        Ok(value) => {
+            // getTokenAccountBalance returns { value: { amount: "123", decimals: 6, ... } }
+            value
+                .get("value")
+                .and_then(|v| v.get("amount"))
+                .and_then(|a| a.as_str())
+                .and_then(|s| s.parse::<u64>().ok())
+                .ok_or_else(|| anyhow!("usd1 token balance missing"))
         }
-        total = total.saturating_add(info.amount);
+        Err(e) if e.to_string().contains("could not find account") => Ok(0),
+        Err(e) => Err(e),
     }
-    total
-}
-
-fn decode_token_account(data: &[u8]) -> Option<TokenAccountInfo> {
-    if let Ok(account) = spl_token::state::Account::unpack_from_slice(data) {
-        return Some(TokenAccountInfo {
-            mint: account.mint,
-            owner: account.owner,
-            amount: account.amount,
-        });
-    }
-
-    let account =
-        spl_token_2022::extension::StateWithExtensions::<spl_token_2022::state::Account>::unpack(
-            data,
-        )
-        .ok()?;
-    Some(TokenAccountInfo {
-        mint: account.base.mint,
-        owner: account.base.owner,
-        amount: account.base.amount,
-    })
 }
 
 fn now_ms() -> u64 {
