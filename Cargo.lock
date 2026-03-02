@@ -1423,9 +1423,9 @@ dependencies = [
 
 [[package]]
 name = "lasersell-sdk"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2cdd099a26492f685ca34263835ba02c08fd11602e469238b02f6b06e8b7710"
+checksum = "e4b4f62640122551d81477d67f763cd810bcff290172081788580096e05fe09c"
 dependencies = [
  "base64 0.21.7",
  "bincode",

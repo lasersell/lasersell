@@ -554,16 +554,9 @@ async fn smoke_exit_api_check(cfg: &config::Config) -> std::result::Result<(), S
         mint: SMOKE_MINT.to_string(),
         user_pubkey: SMOKE_WALLET_PUBKEY.to_string(),
         amount_tokens: 1,
-        slippage_bps: Some(1000),
-        mode: None,
-        output: Some(SellOutput::Sol),
-
-        market_context: None,
-        send_mode: None,
-        tip_lamports: None,
-        partner_fee_recipient: None,
-        partner_fee_bps: None,
-        partner_fee_lamports: None,
+        output: SellOutput::Sol,
+        slippage_bps: 1000,
+        ..Default::default()
     };
 
     let response = timeout(Duration::from_secs(5), exit_api.build_sell_tx(&request))

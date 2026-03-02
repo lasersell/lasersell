@@ -982,16 +982,11 @@ fn build_manual_sell_request(
         mint: mint.to_string(),
         user_pubkey: wallet_pubkey.to_string(),
         amount_tokens,
-        slippage_bps: Some(slippage_bps),
-        mode: None,
-        output: Some(infer_manual_sell_output(market_context)),
-
+        output: infer_manual_sell_output(market_context),
+        slippage_bps,
         market_context: market_context.map(market_context_to_msg),
         send_mode: Some(send_mode.to_string()),
-        tip_lamports: None,
-        partner_fee_recipient: None,
-        partner_fee_bps: None,
-        partner_fee_lamports: None,
+        ..Default::default()
     })
 }
 
