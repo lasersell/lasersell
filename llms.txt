@@ -69,6 +69,18 @@ Press Tab to switch to the command pane:
 - Memory safety: sensitive data zeroized after use
 - Fully open source (MIT license)
 
+## Performance
+
+LaserSell is 2-5x faster than every major Solana trading API at building swap transactions. Benchmarked against PumpFun SDK, PumpPortal, and Jupiter Metis API.
+
+- Buy tx build: 71ms median (vs 141ms PumpPortal, 168ms Jupiter, 365ms PumpFun SDK)
+- Sell tx build: 72ms median (vs 121ms PumpPortal, 175ms Jupiter, 317ms PumpFun SDK)
+- Sub-80ms median across both buy and sell operations
+- Tight variance: ~19-44ms spread between min and max (vs 125ms+ for alternatives)
+- Single HTTP request — no multi-step quote-then-swap flow, no 5+ RPC roundtrips
+
+Benchmarks are open-source and reproducible: https://github.com/lasersell/benchmarks
+
 ## Links
 
 - Website: https://lasersell.io
@@ -76,6 +88,8 @@ Press Tab to switch to the command pane:
 - Documentation: https://docs.lasersell.io
 - CLI repo: https://github.com/lasersell/lasersell
 - SDK repo: https://github.com/lasersell/lasersell-sdk
+- Blog: https://www.lasersell.io/blog
+- Benchmark results: https://www.lasersell.io/blog/benchmark-results
 - Discord: https://discord.gg/lasersell
 - Twitter: https://x.com/lasersellhq
 - Security: https://www.lasersell.io/security
