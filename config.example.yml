@@ -25,6 +25,9 @@ account:
   local: false
 
 strategy:
+  # IMPORTANT: The values below are examples only, not an official trading strategy.
+  # Configure these based on your own risk tolerance and trading style.
+  #
   # All values are percent of detected buy amount. Use "0%" to disable.
   # At least one of target_profit, stop_loss, trailing_stop, or deadline_timeout must be > 0.
 

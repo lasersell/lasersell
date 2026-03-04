@@ -27,6 +27,8 @@
 
 ---
 
+> **New to LaserSell?** Read [Your First Automated Exit](https://www.lasersell.io/blog/your-first-automated-exit) for a full walkthrough from install to your first automated sell.
+
 ## What is LaserSell?
 
 LaserSell is an open-source CLI daemon that automatically sells Solana tokens when your exit conditions are met. It connects to the Exit Intelligence stream, a server-side position monitor that watches your holdings in real time and delivers ready-to-sign exit transactions the moment your take-profit, stop-loss, trailing-stop, or deadline triggers.
@@ -117,6 +119,8 @@ pause / resume       # pause or resume new sessions
 ## Configuration
 
 LaserSell reads from `~/.lasersell/config.yml`. Override with `-f path/to/config.yml` or environment variables.
+
+> **Note:** The strategy values below are examples only, not an official trading strategy. Configure based on your own risk tolerance.
 
 ```yaml
 account:
@@ -218,6 +222,7 @@ cargo build --features devnet
 
 | Resource | Link |
 |----------|------|
+| Getting started | [Your First Automated Exit](https://www.lasersell.io/blog/your-first-automated-exit) |
 | Website | [lasersell.io](https://lasersell.io) |
 | Dashboard & API keys | [app.lasersell.io](https://app.lasersell.io) |
 | Documentation | [docs.lasersell.io](https://docs.lasersell.io) |

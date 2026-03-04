@@ -37,9 +37,12 @@ Supports macOS, Linux, Windows (WSL), and Raspberry Pi.
 
 ## Quick start
 
-1. Get a free API key at https://app.lasersell.io/auth/sign-up
-2. Run `lasersell --setup` (interactive wizard for RPC, API key, strategy, wallet)
-3. Run `lasersell` to start the daemon
+1. Sign up for a free tier private RPC from Helius, Shyft, or Chainstack
+2. Get a free API key at https://app.lasersell.io/auth/sign-up
+3. Run `lasersell --setup` (interactive wizard for RPC, API key, strategy, wallet)
+4. Run `lasersell` to start the daemon
+
+For a full walkthrough from install to your first automated sell, read: https://www.lasersell.io/blog/your-first-automated-exit
 
 ## Configuration
 
@@ -89,6 +92,7 @@ Benchmarks are open-source and reproducible: https://github.com/lasersell/benchm
 - CLI repo: https://github.com/lasersell/lasersell
 - SDK repo: https://github.com/lasersell/lasersell-sdk
 - Blog: https://www.lasersell.io/blog
+- Getting started: https://www.lasersell.io/blog/your-first-automated-exit
 - Benchmark results: https://www.lasersell.io/blog/benchmark-results
 - Discord: https://discord.gg/lasersell
 - Twitter: https://x.com/lasersellhq
