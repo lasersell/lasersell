@@ -13,7 +13,7 @@ use solana_sdk::signer::Signer;
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::config::{AccountConfig, Config, SellConfig, StrategyAmount, StrategyConfig};
-use crate::ui::format::{format_bps_percent, parse_percent_to_bps};
+use crate::ui::format::parse_percent_to_bps;
 use crate::util::support;
 use crate::wallet;
 
@@ -145,10 +145,6 @@ fn run_onboarding_inner(config_path: &Path) -> Result<(Config, Keypair)> {
     cliclack::clear_screen()?;
     cliclack::intro("LaserSell Setup")?;
 
-    let use_recommended: bool = cliclack::confirm("Use recommended settings? (skips strategy + file path questions)")
-        .initial_value(true)
-        .interact()?;
-
     // ── Credentials & Network ──────────────────────────────────────────
     cliclack::log::step("Credentials & Network")?;
 
@@ -169,30 +165,7 @@ fn run_onboarding_inner(config_path: &Path) -> Result<(Config, Keypair)> {
         timeout_enabled,
         slippage_max_bps,
         sell_on_graduation,
-    } = if use_recommended {
-        let defaults = StrategyInputs {
-            target_profit: StrategyAmount::Percent(6.0),
-            target_profit_enabled: true,
-            stop_loss: StrategyAmount::Percent(10.0),
-            stop_loss_enabled: true,
-            trailing_stop: StrategyAmount::Percent(5.0),
-            trailing_stop_enabled: true,
-            sell_timeout_sec: 0,
-            timeout_enabled: false,
-            slippage_max_bps: 3000,
-            sell_on_graduation: false,
-        };
-        let slippage_label = format_bps_percent(defaults.slippage_max_bps);
-        let target_profit_label = format_strategy_amount(&defaults.target_profit);
-        let stop_loss_label = format_strategy_amount(&defaults.stop_loss);
-        let deadline_label = format!("{}s", defaults.sell_timeout_sec);
-        cliclack::log::success(format!(
-            "Applied recommended defaults: Take Profit {target_profit_label} | Stop Loss {stop_loss_label} | Deadline {deadline_label} | Slippage {slippage_label}"
-        ))?;
-        defaults
-    } else {
-        prompt_strategy_inputs()?
-    };
+    } = prompt_strategy_inputs()?;
 
     // ── Wallet ─────────────────────────────────────────────────────────
     cliclack::log::step("Wallet")?;
@@ -265,11 +238,7 @@ fn run_onboarding_inner(config_path: &Path) -> Result<(Config, Keypair)> {
     // ── Save Configuration ─────────────────────────────────────────────
     cliclack::log::step("Save Configuration")?;
 
-    let mut config_path = if use_recommended {
-        config_path.to_path_buf()
-    } else {
-        prompt_path("Config file location", config_path)?
-    };
+    let mut config_path = prompt_path("Config file location", config_path)?;
     let mut keystore_path = if reuse_existing_keystore {
         let path =
             existing_keystore_path.ok_or_else(|| anyhow!("existing keystore path missing"))?;
@@ -278,8 +247,6 @@ fn run_onboarding_inner(config_path: &Path) -> Result<(Config, Keypair)> {
             path.display()
         ))?;
         path
-    } else if use_recommended {
-        default_keystore_path_for_config(&config_path)
     } else {
         prompt_path(
             "Keystore file location",
@@ -316,12 +283,6 @@ fn run_onboarding_inner(config_path: &Path) -> Result<(Config, Keypair)> {
             .initial_value(false)
             .interact()?;
             if !overwrite {
-                if use_recommended {
-                    return Err(anyhow!(
-                        "config file {} exists; rerun without recommended settings to choose a different path",
-                        config_path.display()
-                    ));
-                }
                 config_path = prompt_path("Config file location", &config_path)?;
                 if !reuse_existing_keystore {
                     keystore_path = prompt_path(
@@ -343,12 +304,6 @@ fn run_onboarding_inner(config_path: &Path) -> Result<(Config, Keypair)> {
             .initial_value(false)
             .interact()?;
             if !overwrite {
-                if use_recommended {
-                    return Err(anyhow!(
-                        "keystore file {} exists; rerun without recommended settings to choose a different path",
-                        keystore_path.display()
-                    ));
-                }
                 keystore_path = prompt_path("Keystore file location", &keystore_path)?;
                 continue;
             }
@@ -363,7 +318,7 @@ fn run_onboarding_inner(config_path: &Path) -> Result<(Config, Keypair)> {
     cliclack::note("Summary", summary)?;
 
     let write_now: bool = cliclack::confirm("Write configuration now?")
-        .initial_value(use_recommended)
+        .initial_value(true)
         .interact()?;
     if !write_now {
         return Err(anyhow!("onboarding cancelled"));

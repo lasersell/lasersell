@@ -1,6 +1,6 @@
 [package]
 name = "lasersell"
-version = "0.4.3"
+version = "0.4.4"
 edition = "2021"
 publish = true
 description = "Open-source Solana exit daemon with automated exits and real-time position monitoring"
