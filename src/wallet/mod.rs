@@ -81,6 +81,14 @@ pub fn detect_wallet_file_kind(path: &Path) -> Result<WalletFileKind> {
     ))
 }
 
+/// Read the plaintext pubkey from an encrypted keystore without decrypting it.
+pub fn read_keystore_pubkey(path: &Path) -> Result<String> {
+    let raw = fs::read(path).with_context(|| format!("read keystore {}", path.display()))?;
+    let keystore: KeystoreV1 = serde_json::from_slice(&raw)
+        .with_context(|| format!("parse keystore {}", path.display()))?;
+    Ok(keystore.pubkey)
+}
+
 pub fn load_keypair_from_path(
     path: &Path,
     mut passphrase_provider: impl FnMut() -> Result<SecretString>,

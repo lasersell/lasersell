@@ -89,9 +89,13 @@ async fn async_main() -> Result<()> {
             let wallet_kind = wallet::detect_wallet_file_kind(&keypair_path)?;
             let keypair = match wallet_kind {
                 wallet::WalletFileKind::EncryptedKeystore => {
+                    let keystore_pubkey = wallet::read_keystore_pubkey(&keypair_path).ok();
                     wallet::load_keypair_from_path(&keypair_path, || {
                         if use_tui {
-                            ui::unlock::prompt_passphrase("Unlock wallet keystore")
+                            ui::unlock::prompt_passphrase(
+                                "Unlock wallet keystore",
+                                keystore_pubkey.as_deref(),
+                            )
                         } else {
                             read_passphrase_non_tui()
                         }
@@ -107,7 +111,7 @@ async fn async_main() -> Result<()> {
                         )?;
                         if migrate {
                             let passphrase =
-                                ui::unlock::prompt_passphrase("Set keystore passphrase")?;
+                                ui::unlock::prompt_passphrase("Set keystore passphrase", None)?;
                             let keystore_path = wallet::default_keystore_path(&keypair_path);
                             wallet::migrate_plaintext_to_keystore(
                                 &keypair_path,
