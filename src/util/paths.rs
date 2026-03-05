@@ -20,7 +20,6 @@ pub fn default_error_log_path() -> Result<PathBuf> {
     Ok(default_data_dir()?.join("error.log"))
 }
 
-#[cfg(feature = "devnet")]
 pub fn default_debug_log_path() -> Result<PathBuf> {
     Ok(default_data_dir()?.join("debug.log"))
 }

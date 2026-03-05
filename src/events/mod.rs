@@ -182,6 +182,15 @@ pub enum AppEvent {
         mint: Pubkey,
         tokens: u64,
     },
+    CostBasisSet {
+        mint: Pubkey,
+        cost_basis_lamports: u64,
+    },
+    PnlUpdate {
+        mint: Pubkey,
+        profit_lamports: i64,
+        proceeds_lamports: u64,
+    },
     SellScheduled {
         mint: Pubkey,
         reason: String,

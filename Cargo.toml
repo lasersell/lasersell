@@ -1,6 +1,6 @@
 [package]
 name = "lasersell"
-version = "0.4.4"
+version = "0.4.5"
 edition = "2021"
 publish = true
 description = "Open-source Solana exit daemon with automated exits and real-time position monitoring"
@@ -11,7 +11,6 @@ documentation = "https://docs.lasersell.io"
 
 [features]
 default = []
-devnet = ["tracing-appender"]
 
 [dependencies]
 anyhow = "1"
@@ -25,7 +24,7 @@ clap = { version = "4", features = ["derive", "env"] }
 cliclack = "0.3"
 crossterm = "0.27"
 directories = "5"
-lasersell-sdk = "0.2.2"
+lasersell-sdk = { path = "../lasersell-sdk/rust" }
 parking_lot = "0.12"
 rand = "0.8"
 ratatui = "0.27"
@@ -42,7 +41,7 @@ spl-token-interface = "2"
 time = { version = "0.3", features = ["macros", "formatting", "parsing"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync", "net", "test-util"] }
 tracing = "0.1"
-tracing-appender = { version = "0.2", optional = true }
+tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 zeroize = "1"
 

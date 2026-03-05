@@ -143,12 +143,15 @@ impl AppEngine {
             cfg.exit_api_request_timeout(),
         )?);
 
+        let stream_send_mode = Some(cfg.send_mode_str().to_string());
         let stream_client = StreamClient::new(
             cfg.account.api_key.clone(),
             cfg.account.local,
             wallet_pubkey.to_string(),
             strategy_to_msg(&cfg.strategy),
             cfg.strategy.deadline_timeout_sec,
+            stream_send_mode,
+            cfg.account.tip_lamports,
         );
         let (stream_handle, evt_rx) = stream_client.connect().await?;
         let stream_handle = Arc::new(stream_handle);
@@ -207,6 +210,7 @@ impl AppEngine {
                 token_program,
                 token_account,
                 tokens,
+                entry_quote_units,
                 slot,
                 market_context,
             } => self.handle_position_opened(
@@ -215,6 +219,7 @@ impl AppEngine {
                 token_program,
                 token_account,
                 tokens,
+                entry_quote_units,
                 slot,
                 market_context,
             ),
@@ -251,6 +256,19 @@ impl AppEngine {
                     unsigned_tx_b64,
                 )
                 .await?;
+            }
+            StreamEvent::PnlUpdate {
+                mint,
+                profit_units,
+                proceeds_units,
+            } => {
+                if let Ok(mint) = Pubkey::from_str(&mint) {
+                    emit(AppEvent::PnlUpdate {
+                        mint,
+                        profit_lamports: profit_units,
+                        proceeds_lamports: proceeds_units,
+                    });
+                }
             }
         }
         Ok(())
@@ -312,6 +330,7 @@ impl AppEngine {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn handle_position_opened(
         &self,
         position_id: u64,
@@ -319,6 +338,7 @@ impl AppEngine {
         token_program: Option<String>,
         token_account: String,
         tokens: u64,
+        entry_quote_units: u64,
         _slot: u64,
         market_context: Option<MarketContextMsg>,
     ) {
@@ -347,6 +367,10 @@ impl AppEngine {
                 context_for_state.as_ref(),
                 Some(tokens),
             );
+            let token_program_pubkey = token_program
+                .as_deref()
+                .and_then(|s| Pubkey::from_str(s).ok())
+                .unwrap_or_else(spl_token::id);
             self.position_snapshots.write().insert(
                 mint,
                 PositionSnapshot {
@@ -356,11 +380,22 @@ impl AppEngine {
                     market_context: parsed_context,
                 },
             );
+            emit(AppEvent::SessionStarted {
+                mint,
+                token_program: token_program_pubkey,
+                started_at_ms: now_ms(),
+            });
             emit(AppEvent::MintDetected {
                 mint,
                 token_account: Pubkey::from_str(&token_account).unwrap_or_default(),
             });
             emit(AppEvent::PositionTokensUpdated { mint, tokens });
+            if entry_quote_units > 0 {
+                emit(AppEvent::CostBasisSet {
+                    mint,
+                    cost_basis_lamports: entry_quote_units,
+                });
+            }
         }
     }
 
@@ -459,6 +494,7 @@ fn stream_event_label(evt: &StreamEvent) -> &'static str {
         StreamEvent::PositionOpened { .. } => "position_opened",
         StreamEvent::PositionClosed { .. } => "position_closed",
         StreamEvent::ExitSignalWithTx { .. } => "exit_signal_with_tx",
+        StreamEvent::PnlUpdate { .. } => "pnl_update",
     }
 }
 
@@ -635,12 +671,12 @@ async fn process_exit_signal_with_tx(
                     event = "autosell_failed",
                     mint = %mint_pubkey,
                     position_id,
-                    error = %err
+                    error = format!("{err:#}")
                 );
-                warn!(event = "session_error", mint = %mint_pubkey, error = %err);
+                warn!(event = "session_error", mint = %mint_pubkey, error = format!("{err:#}"));
                 emit(AppEvent::SessionError {
                     mint: mint_pubkey,
-                    error: err.to_string(),
+                    error: format!("{err:#}"),
                 });
             }
         }
@@ -693,17 +729,17 @@ async fn execute_auto_sell_with_refresh(
         match send_result {
             Ok(signature) => return Ok((signature, slippage_bps)),
             Err(err) => {
-                warn!(event = "app_autosell_attempt_failed", mint = %mint, attempt, error = %err);
+                warn!(event = "app_autosell_attempt_failed", mint = %mint, attempt, error = format!("{err:#}"));
                 if refreshes_used >= sell_cfg.max_retries {
                     return Err(anyhow!(
-                        "autosell failed for position_id {position_id} after {attempt} attempts: {err}"
+                        "autosell failed for position_id {position_id} after {attempt} attempts: {err:#}"
                     ));
                 }
                 emit(AppEvent::SellRetry {
                     mint,
                     attempt,
                     phase: classify_sell_retry_phase(&err).to_string(),
-                    error: err.to_string(),
+                    error: format!("{err:#}"),
                 });
 
                 slippage_bps = bumped_slippage_bps(slippage_bps, refreshes_used, &sell_cfg);

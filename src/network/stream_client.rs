@@ -14,6 +14,8 @@ pub struct StreamClient {
     wallet_pubkey: String,
     strategy: StrategyConfigMsg,
     deadline_timeout_sec: u64,
+    send_mode: Option<String>,
+    tip_lamports: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -69,6 +71,7 @@ pub enum StreamEvent {
         token_program: Option<String>,
         token_account: String,
         tokens: u64,
+        entry_quote_units: u64,
         slot: u64,
         market_context: Option<MarketContextMsg>,
     },
@@ -91,6 +94,11 @@ pub enum StreamEvent {
         market_context: Option<MarketContextMsg>,
         unsigned_tx_b64: String,
     },
+    PnlUpdate {
+        mint: String,
+        profit_units: i64,
+        proceeds_units: u64,
+    },
 }
 
 impl StreamClient {
@@ -100,12 +108,16 @@ impl StreamClient {
         wallet_pubkey: String,
         strategy: StrategyConfigMsg,
         deadline_timeout_sec: u64,
+        send_mode: Option<String>,
+        tip_lamports: Option<u64>,
     ) -> Self {
         Self {
             sdk: SdkStreamClient::new(api_key).with_local_mode(local),
             wallet_pubkey,
             strategy,
             deadline_timeout_sec,
+            send_mode,
+            tip_lamports,
         }
     }
 
@@ -113,6 +125,8 @@ impl StreamClient {
         let mut configure =
             StreamConfigure::single_wallet(self.wallet_pubkey.clone(), self.strategy.clone());
         configure.deadline_timeout_sec = self.deadline_timeout_sec;
+        configure.send_mode = self.send_mode.clone();
+        configure.tip_lamports = self.tip_lamports;
         let mut session = StreamSession::connect(&self.sdk, configure)
             .await
             .context("connect to stream server")?;
@@ -171,11 +185,12 @@ fn sdk_event_label(evt: &SdkStreamEvent) -> &'static str {
         SdkStreamEvent::PositionClosed { .. } => "position_closed",
         SdkStreamEvent::ExitSignalWithTx { .. } => "exit_signal_with_tx",
         SdkStreamEvent::PnlUpdate { .. } => "pnl_update",
+        SdkStreamEvent::LiquiditySnapshot { .. } => "liquidity_snapshot",
     }
 }
 
 fn map_session_event(evt: SdkStreamEvent) -> Option<StreamEvent> {
-    debug!(event = "stream_session_event_received", variant = sdk_event_label(&evt));
+    info!(event = "stream_session_event_received", variant = sdk_event_label(&evt));
     match evt {
         SdkStreamEvent::Message(msg) => map_server_event(msg),
         SdkStreamEvent::PositionOpened { handle, message } => {
@@ -205,7 +220,20 @@ fn map_session_event(evt: SdkStreamEvent) -> Option<StreamEvent> {
             }
             map_server_event(message)
         }
-        SdkStreamEvent::PnlUpdate { message, .. } => map_server_event(message),
+        SdkStreamEvent::PnlUpdate { handle, message } => {
+            if let (Some(h), ServerMessage::PnlUpdate { profit_units, proceeds_units, .. }) =
+                (handle, &message)
+            {
+                Some(StreamEvent::PnlUpdate {
+                    mint: h.mint.clone(),
+                    profit_units: *profit_units,
+                    proceeds_units: *proceeds_units,
+                })
+            } else {
+                None
+            }
+        }
+        SdkStreamEvent::LiquiditySnapshot { .. } => None,
     }
 }
 
@@ -231,6 +259,7 @@ fn map_server_event(msg: ServerMessage) -> Option<StreamEvent> {
             token_account,
             token_program,
             tokens,
+            entry_quote_units,
             market_context,
             slot,
             ..
@@ -240,6 +269,7 @@ fn map_server_event(msg: ServerMessage) -> Option<StreamEvent> {
             token_program,
             token_account,
             tokens,
+            entry_quote_units,
             slot,
             market_context,
         }),
@@ -283,6 +313,7 @@ fn map_server_event(msg: ServerMessage) -> Option<StreamEvent> {
         }),
         ServerMessage::HelloOk { .. } | ServerMessage::Pong { .. } => None,
         ServerMessage::PnlUpdate { .. } => None,
+        ServerMessage::LiquiditySnapshot { .. } => None,
         ServerMessage::Error { code, message } => {
             warn!(event = "stream_server_error", code = %code, message = %message);
             None

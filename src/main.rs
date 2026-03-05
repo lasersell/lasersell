@@ -162,20 +162,19 @@ async fn async_main() -> Result<()> {
         });
     }
 
-    #[cfg(feature = "devnet")]
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,lasersell=debug,lasersell_sdk=debug"));
-    #[cfg(not(feature = "devnet"))]
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    #[cfg(feature = "devnet")]
-    let _devnet_log_guard = init_devnet_logging(use_tui, filter);
-    #[cfg(not(feature = "devnet"))]
-    init_tracing(use_tui, filter);
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        if cli.debug {
+            EnvFilter::new("info,lasersell=debug,lasersell_sdk=debug,lasersell_sdk::stream::client=trace")
+        } else {
+            EnvFilter::new("info")
+        }
+    });
+    let _debug_log_guard = init_tracing(use_tui, cli.debug, filter);
     let wallet_pubkey = cfg.wallet_pubkey(&keypair)?;
 
     events::emit(events::AppEvent::Startup {
         version: env!("CARGO_PKG_VERSION").to_string(),
-        devnet: cfg!(feature = "devnet"),
+        devnet: false,
         wallet_pubkey,
     });
 
@@ -294,6 +293,7 @@ struct CliArgs {
     config_path: PathBuf,
     verbose: bool,
     no_tui: bool,
+    debug: bool,
     setup: bool,
     smoke: bool,
     export_private_key: bool,
@@ -318,6 +318,8 @@ struct RawCliArgs {
     verbose: bool,
     #[arg(long = "no-tui")]
     no_tui: bool,
+    #[arg(long = "debug", help = "Write debug-level logs to debug.log")]
+    debug: bool,
     #[arg(long = "setup")]
     setup: bool,
     #[arg(long = "smoke")]
@@ -379,6 +381,7 @@ fn normalize_cli_args(raw: RawCliArgs) -> Result<CliArgs> {
             config_path: raw.config_path.unwrap_or_default(),
             verbose: raw.verbose,
             no_tui: raw.no_tui,
+            debug: raw.debug,
             setup: raw.setup,
             smoke: raw.smoke,
             export_private_key,
@@ -400,6 +403,7 @@ fn normalize_cli_args(raw: RawCliArgs) -> Result<CliArgs> {
         config_path,
         verbose: raw.verbose,
         no_tui: raw.no_tui,
+        debug: raw.debug,
         setup: raw.setup,
         smoke: raw.smoke,
         export_private_key,
@@ -577,101 +581,11 @@ fn optional_api_key_for_smoke(api_key: &SecretString) -> Option<SecretString> {
     Some(SecretString::new(trimmed.to_string()))
 }
 
-#[cfg(not(feature = "devnet"))]
-fn init_tracing(use_tui: bool, filter: EnvFilter) {
-    let error_log_path = match util::paths::default_error_log_path() {
-        Ok(path) => Some(path),
-        Err(err) => {
-            eprintln!(
-                "{}",
-                util::support::with_support_hint(format!(
-                    "Failed to resolve error log path: {err}"
-                ))
-            );
-            None
-        }
-    };
-    if error_log_path.is_some() {
-        if let Err(err) = util::paths::ensure_data_dir_exists() {
-            eprintln!(
-                "{}",
-                util::support::with_support_hint(format!(
-                    "Failed to create data dir for error log: {err}"
-                ))
-            );
-        }
-    }
-
-    install_error_log_panic_hook(error_log_path.clone());
-
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer({
-            let error_log_path = error_log_path.clone();
-            move || {
-                let writer: Box<dyn Write + Send> = match error_log_path.as_ref() {
-                    Some(path) => match OpenOptions::new().create(true).append(true).open(path) {
-                        Ok(file) => Box::new(file),
-                        Err(err) => {
-                            eprintln!(
-                                "{}",
-                                util::support::with_support_hint(format!(
-                                    "Failed to open error log {}: {err}",
-                                    path.display()
-                                ))
-                            );
-                            Box::new(std::io::sink())
-                        }
-                    },
-                    None => Box::new(std::io::sink()),
-                };
-                util::logging::RedactingWriter::new(writer)
-            }
-        })
-        .with_ansi(false)
-        .with_filter(tracing_subscriber::filter::LevelFilter::WARN);
-
-    if use_tui {
-        tracing_subscriber::registry()
-            .with(file_layer)
-            .with(events::log_layer())
-            .with(filter)
-            .init();
-    } else {
-        tracing_subscriber::registry()
-            .with(file_layer)
-            .with(tracing_subscriber::fmt::layer())
-            .with(filter)
-            .init();
-    }
-}
-
-fn install_error_log_panic_hook(error_log_path: Option<PathBuf>) {
-    let default_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        if let Some(path) = error_log_path.as_ref() {
-            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-                let message = panic_message(info).replace('\n', "\\n");
-                let mut line = format!("utc={} panic message={message}", utc_timestamp());
-                if let Some(location) = info.location() {
-                    line.push_str(&format!(
-                        " location={}:{}",
-                        location.file(),
-                        location.line()
-                    ));
-                }
-                let scrubbed = util::logging::scrub_sensitive(&line);
-                let _ = writeln!(file, "{scrubbed}");
-            }
-        }
-        default_hook(info);
-    }));
-}
-
-#[cfg(feature = "devnet")]
-fn init_devnet_logging(
+fn init_tracing(
     use_tui: bool,
+    debug: bool,
     filter: EnvFilter,
-) -> tracing_appender::non_blocking::WorkerGuard {
+) -> Option<tracing_appender::non_blocking::WorkerGuard> {
     let error_log_path = match util::paths::default_error_log_path() {
         Ok(path) => Some(path),
         Err(err) => {
@@ -684,19 +598,23 @@ fn init_devnet_logging(
             None
         }
     };
-    let debug_log_path = match util::paths::default_debug_log_path() {
-        Ok(path) => Some(path),
-        Err(err) => {
-            eprintln!(
-                "{}",
-                util::support::with_support_hint(format!(
-                    "Failed to resolve debug log path: {err}"
-                ))
-            );
-            None
+    let debug_log_path = if debug {
+        match util::paths::default_debug_log_path() {
+            Ok(path) => Some(path),
+            Err(err) => {
+                eprintln!(
+                    "{}",
+                    util::support::with_support_hint(format!(
+                        "Failed to resolve debug log path: {err}"
+                    ))
+                );
+                None
+            }
         }
+    } else {
+        None
     };
-    if debug_log_path.is_some() || error_log_path.is_some() {
+    if error_log_path.is_some() || debug_log_path.is_some() {
         if let Err(err) = util::paths::ensure_data_dir_exists() {
             eprintln!(
                 "{}",
@@ -707,33 +625,8 @@ fn init_devnet_logging(
         }
     }
 
-    install_error_log_panic_hook(error_log_path.clone());
-    if let Some(path) = debug_log_path.as_ref() {
-        write_devnet_session_header(path);
-    }
-    install_devnet_panic_hook(debug_log_path.clone());
+    install_error_log_panic_hook(error_log_path.clone(), debug_log_path.clone());
 
-    let (non_blocking, guard) = match debug_log_path.as_ref() {
-        Some(path) => {
-            if let Some(dir) = path.parent() {
-                let file_name = path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "debug.log".to_string());
-                let file_appender = tracing_appender::rolling::never(dir, file_name);
-                tracing_appender::non_blocking(file_appender)
-            } else {
-                tracing_appender::non_blocking(std::io::sink())
-            }
-        }
-        None => tracing_appender::non_blocking(std::io::sink()),
-    };
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer({
-            let non_blocking = non_blocking.clone();
-            move || util::logging::RedactingWriter::new(non_blocking.clone())
-        })
-        .with_ansi(false);
     let error_file_layer = tracing_subscriber::fmt::layer()
         .with_writer({
             let error_log_path = error_log_path.clone();
@@ -760,17 +653,41 @@ fn init_devnet_logging(
         .with_ansi(false)
         .with_filter(tracing_subscriber::filter::LevelFilter::WARN);
 
+    let debug_guard = if let Some(path) = debug_log_path.as_ref() {
+        write_debug_session_header(path);
+        let dir = path.parent().expect("debug log path has parent");
+        let file_name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "debug.log".to_string());
+        let file_appender = tracing_appender::rolling::never(dir, file_name);
+        Some(tracing_appender::non_blocking(file_appender))
+    } else {
+        None
+    };
+
+    let (debug_writer, guard) = match debug_guard {
+        Some((non_blocking, guard)) => (Some(non_blocking), Some(guard)),
+        None => (None, None),
+    };
+
+    let debug_file_layer = debug_writer.map(|non_blocking| {
+        tracing_subscriber::fmt::layer()
+            .with_writer(move || util::logging::RedactingWriter::new(non_blocking.clone()))
+            .with_ansi(false)
+    });
+
     if use_tui {
         tracing_subscriber::registry()
             .with(error_file_layer)
-            .with(file_layer)
+            .with(debug_file_layer)
             .with(events::log_layer())
             .with(filter)
             .init();
     } else {
         tracing_subscriber::registry()
             .with(error_file_layer)
-            .with(file_layer)
+            .with(debug_file_layer)
             .with(tracing_subscriber::fmt::layer())
             .with(filter)
             .init();
@@ -779,14 +696,7 @@ fn init_devnet_logging(
     guard
 }
 
-fn utc_timestamp() -> String {
-    time::OffsetDateTime::now_utc()
-        .format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_else(|_| "0000-00-00T00:00:00Z".to_string())
-}
-
-#[cfg(feature = "devnet")]
-fn write_devnet_session_header(debug_log_path: &Path) {
+fn write_debug_session_header(debug_log_path: &Path) {
     let timestamp = utc_timestamp();
     match OpenOptions::new()
         .create(true)
@@ -795,9 +705,9 @@ fn write_devnet_session_header(debug_log_path: &Path) {
     {
         Ok(mut file) => {
             let pid = std::process::id();
-            let _ = writeln!(file, "\n----- devnet session start -----");
+            let _ = writeln!(file, "\n----- debug session start -----");
             let line = format!(
-                "utc={} version={} pid={} devnet build",
+                "utc={} version={} pid={}",
                 timestamp,
                 env!("CARGO_PKG_VERSION"),
                 pid
@@ -813,10 +723,27 @@ fn write_devnet_session_header(debug_log_path: &Path) {
     }
 }
 
-#[cfg(feature = "devnet")]
-fn install_devnet_panic_hook(debug_log_path: Option<PathBuf>) {
+fn install_error_log_panic_hook(
+    error_log_path: Option<PathBuf>,
+    debug_log_path: Option<PathBuf>,
+) {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        if let Some(path) = error_log_path.as_ref() {
+            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+                let message = panic_message(info).replace('\n', "\\n");
+                let mut line = format!("utc={} panic message={message}", utc_timestamp());
+                if let Some(location) = info.location() {
+                    line.push_str(&format!(
+                        " location={}:{}",
+                        location.file(),
+                        location.line()
+                    ));
+                }
+                let scrubbed = util::logging::scrub_sensitive(&line);
+                let _ = writeln!(file, "{scrubbed}");
+            }
+        }
         if let Some(path) = debug_log_path.as_ref() {
             if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
                 let _ = writeln!(file, "\n----- panic -----");
@@ -833,6 +760,12 @@ fn install_devnet_panic_hook(debug_log_path: Option<PathBuf>) {
         }
         default_hook(info);
     }));
+}
+
+fn utc_timestamp() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "0000-00-00T00:00:00Z".to_string())
 }
 
 fn panic_message(info: &std::panic::PanicHookInfo<'_>) -> String {

@@ -604,7 +604,7 @@ fn prompt_strategy_inputs() -> Result<StrategyInputs> {
             .initial_value(false)
             .interact()?;
         let ts = if ts_enabled {
-            prompt_strategy_amount("Trailing Stop (% of buy)", "5%", false)?
+            prompt_strategy_amount("Trailing Stop (% drop from peak)", "5%", false)?
         } else {
             StrategyAmount::Percent(0.0)
         };
@@ -762,7 +762,8 @@ fn build_config(inputs: &ConfigInputs, keystore_path: &Path) -> Result<Config> {
             local: inputs.local,
             rpc_url: SecretString::new(inputs.rpc_url.clone()),
             api_key: SecretString::new(inputs.api_key.clone()),
-            send_target: None,
+            send_target: Some("helius_sender".to_string()),
+            tip_lamports: Some(1_000_000),
             astralane_api_key: SecretString::new(String::new()),
         },
         strategy: StrategyConfig {

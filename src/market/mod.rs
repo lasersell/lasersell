@@ -6,10 +6,7 @@ use solana_sdk::pubkey::Pubkey;
 pub mod context_from_msg;
 pub mod context_to_msg;
 
-#[cfg(not(feature = "devnet"))]
 pub const USD1_MINT: &str = "USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB";
-#[cfg(feature = "devnet")]
-pub const USD1_MINT: &str = "USDCoctVLVnvTXBEuP9s8hntucdJokbo17RwHuNXemT";
 
 pub const USD1_DECIMALS: u8 = 6;
 

@@ -574,6 +574,28 @@ impl UiState {
                     row.note = "Position updated".to_string();
                 });
             }
+            AppEvent::CostBasisSet {
+                mint,
+                cost_basis_lamports,
+            } => {
+                if let Some(session) = self.sessions.get_mut(&mint) {
+                    session.cost_basis_lamports = Some(cost_basis_lamports);
+                }
+            }
+            AppEvent::PnlUpdate {
+                mint,
+                profit_lamports,
+                proceeds_lamports,
+            } => {
+                if let Some(session) = self.sessions.get_mut(&mint) {
+                    session.last_proceeds_lamports = Some(proceeds_lamports);
+                    session.last_pnl_lamports = Some(profit_lamports as i128);
+                    session.pnl_history.push_back(profit_lamports);
+                    if session.pnl_history.len() > PNL_HISTORY_CAPACITY {
+                        session.pnl_history.pop_front();
+                    }
+                }
+            }
             AppEvent::SellScheduled {
                 mint,
                 reason,

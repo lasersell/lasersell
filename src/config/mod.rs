@@ -38,8 +38,10 @@ pub struct AccountConfig {
         serialize_with = "serialize_secret_string"
     )]
     pub api_key: SecretString,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default = "default_send_target", skip_serializing_if = "Option::is_none")]
     pub send_target: Option<String>,
+    #[serde(default = "default_tip_lamports")]
+    pub tip_lamports: Option<u64>,
     #[serde(
         default = "default_secret_string",
         deserialize_with = "deserialize_secret_string",
@@ -118,14 +120,16 @@ pub const EXIT_API_BASE_URL: &str = "https://api.lasersell.io";
 pub const LOCAL_STREAM_ENDPOINT: &str = "ws://localhost:8082/v1/ws";
 pub const LOCAL_EXIT_API_BASE_URL: &str = "http://localhost:8080";
 
-#[cfg(feature = "devnet")]
-fn default_confirm_timeout_sec() -> u64 {
-    25
-}
-
-#[cfg(not(feature = "devnet"))]
 fn default_confirm_timeout_sec() -> u64 {
     10
+}
+
+fn default_send_target() -> Option<String> {
+    Some("helius_sender".to_string())
+}
+
+fn default_tip_lamports() -> Option<u64> {
+    Some(1_000_000)
 }
 
 fn default_trailing_stop() -> StrategyAmount {
