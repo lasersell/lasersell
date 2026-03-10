@@ -186,6 +186,7 @@ fn sdk_event_label(evt: &SdkStreamEvent) -> &'static str {
         SdkStreamEvent::ExitSignalWithTx { .. } => "exit_signal_with_tx",
         SdkStreamEvent::PnlUpdate { .. } => "pnl_update",
         SdkStreamEvent::LiquiditySnapshot { .. } => "liquidity_snapshot",
+        SdkStreamEvent::TradeTick { .. } => "trade_tick",
     }
 }
 
@@ -234,6 +235,7 @@ fn map_session_event(evt: SdkStreamEvent) -> Option<StreamEvent> {
             }
         }
         SdkStreamEvent::LiquiditySnapshot { .. } => None,
+        SdkStreamEvent::TradeTick { .. } => None,
     }
 }
 
@@ -314,6 +316,7 @@ fn map_server_event(msg: ServerMessage) -> Option<StreamEvent> {
         ServerMessage::HelloOk { .. } | ServerMessage::Pong { .. } => None,
         ServerMessage::PnlUpdate { .. } => None,
         ServerMessage::LiquiditySnapshot { .. } => None,
+        ServerMessage::TradeTick { .. } => None,
         ServerMessage::Error { code, message } => {
             warn!(event = "stream_server_error", code = %code, message = %message);
             None

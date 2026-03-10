@@ -1454,7 +1454,7 @@ dependencies = [
 
 [[package]]
 name = "lasersell"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "anyhow",
  "argon2",
@@ -1492,9 +1492,9 @@ dependencies = [
 
 [[package]]
 name = "lasersell-sdk"
-version = "0.3.1"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "053615f40346d0558825cc3fc40d8e226ef90c80d596912c8b43445572a518ab"
+checksum = "6decbb85ef7206f69406cdcb1e2fed800370f16417c8e1b106737d82f2496ada"
 dependencies = [
  "base64 0.21.7",
  "bincode",
@@ -1513,9 +1513,9 @@ dependencies = [
 
 [[package]]
 name = "lasersell-stream-proto"
-version = "0.5.0"
+version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a93a5e72805910354b0b49b05b9d6b44ad98032d641638e5cd497a2675e3322c"
+checksum = "00baf688a9de8c6af7695a813a2082ce155bb8252aaf13b827b112a9c0ef01c9"
 dependencies = [
  "serde",
  "serde_json",

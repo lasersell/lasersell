@@ -1077,6 +1077,7 @@ fn strategy_to_msg(strategy: &StrategyConfig) -> StrategyConfigMsg {
         stop_loss_pct: strategy.stop_loss.percent_value(),
         trailing_stop_pct: strategy.trailing_stop.percent_value(),
         sell_on_graduation: strategy.sell_on_graduation,
+        ..Default::default()
     }
 }
 
