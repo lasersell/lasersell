@@ -153,7 +153,7 @@ impl AppEngine {
             stream_send_mode,
             cfg.account.tip_lamports,
         );
-        let (stream_handle, evt_rx) = stream_client.connect().await?;
+        let (stream_handle, evt_rx) = stream_client.connect(&keypair).await?;
         let stream_handle = Arc::new(stream_handle);
 
         let market_contexts = Arc::new(ParkingRwLock::new(HashMap::<Pubkey, MarketContext>::new()));

@@ -24,7 +24,7 @@ clap = { version = "4", features = ["derive", "env"] }
 cliclack = "0.3"
 crossterm = "0.27"
 directories = "5"
-lasersell-sdk = "1.0.1"
+lasersell-sdk = "1.0.2"
 parking_lot = "0.12"
 rand = "0.8"
 ratatui = "0.27"

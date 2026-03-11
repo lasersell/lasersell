@@ -1,16 +1,20 @@
 use anyhow::{anyhow, Context, Result};
+use lasersell_sdk::exit_api::{ExitApiClient, ExitApiClientOptions};
 use lasersell_sdk::stream::client::{
     StreamClient as SdkStreamClient, StreamConfigure, StreamSender,
 };
 use lasersell_sdk::stream::proto::{MarketContextMsg, ServerMessage, StrategyConfigMsg};
 use lasersell_sdk::stream::session::{StreamEvent as SdkStreamEvent, StreamSession};
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
+use solana_sdk::signature::Keypair;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 #[derive(Clone)]
 pub struct StreamClient {
     sdk: SdkStreamClient,
+    api_key: SecretString,
+    local: bool,
     wallet_pubkey: String,
     strategy: StrategyConfigMsg,
     deadline_timeout_sec: u64,
@@ -112,7 +116,9 @@ impl StreamClient {
         tip_lamports: Option<u64>,
     ) -> Self {
         Self {
-            sdk: SdkStreamClient::new(api_key).with_local_mode(local),
+            sdk: SdkStreamClient::new(api_key.clone()).with_local_mode(local),
+            api_key,
+            local,
             wallet_pubkey,
             strategy,
             deadline_timeout_sec,
@@ -121,7 +127,27 @@ impl StreamClient {
         }
     }
 
-    pub async fn connect(&self) -> Result<(StreamHandle, mpsc::UnboundedReceiver<StreamEvent>)> {
+    pub async fn connect(
+        &self,
+        keypair: &Keypair,
+    ) -> Result<(StreamHandle, mpsc::UnboundedReceiver<StreamEvent>)> {
+        // Register wallet ownership before connecting to stream.
+        let proof = lasersell_sdk::exit_api::prove_ownership(keypair);
+        let api_key_trimmed = self.api_key.expose_secret().trim().to_string();
+        if !api_key_trimmed.is_empty() {
+            let client = ExitApiClient::with_options(
+                Some(SecretString::new(api_key_trimmed)),
+                ExitApiClientOptions::default(),
+            )
+            .context("build exit-api client for wallet registration")?
+            .with_local_mode(self.local);
+            if let Err(e) = client.register_wallet(&proof, None).await {
+                warn!(event = "wallet_registration_failed", error = %e);
+            } else {
+                info!(event = "wallet_registered", wallet = %self.wallet_pubkey);
+            }
+        }
+
         let mut configure =
             StreamConfigure::single_wallet(self.wallet_pubkey.clone(), self.strategy.clone());
         configure.deadline_timeout_sec = self.deadline_timeout_sec;
@@ -131,6 +157,9 @@ impl StreamClient {
             .await
             .context("connect to stream server")?;
         info!(event = "stream_client_authed");
+
+        // Enable priority lanes so exit signals are never delayed by PnL updates.
+        session.enable_lanes(64);
 
         let sender = session.sender();
         let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<StreamCommand>();
