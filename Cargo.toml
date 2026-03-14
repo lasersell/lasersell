@@ -1,9 +1,9 @@
 [package]
 name = "lasersell"
-version = "0.4.6"
+version = "1.0.0"
 edition = "2021"
 publish = true
-description = "Open-source Solana exit daemon with automated exits and real-time position monitoring"
+description = "LaserSell CLI — automated exit daemon for Solana with real-time position monitoring"
 license = "MIT"
 homepage = "https://lasersell.io"
 repository = "https://github.com/lasersell/lasersell"
@@ -15,19 +15,16 @@ default = []
 [dependencies]
 anyhow = "1"
 argon2 = "0.5"
-async-trait = "0.1"
 base64 = "0.21"
 bip39 = { package = "tiny-bip39", version = "0.8.2" }
 bs58 = "0.5"
 chacha20poly1305 = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
 cliclack = "0.3"
-crossterm = "0.27"
 directories = "5"
-lasersell-sdk = "1.0.2"
+lasersell-sdk = "1.0.4"
 parking_lot = "0.12"
 rand = "0.8"
-ratatui = "0.27"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 rpassword = "7"
 secrecy = "0.8"
@@ -37,9 +34,8 @@ serde_yaml = "0.9"
 solana-derivation-path = "3.0.0"
 solana-sdk = "=3.0.0"
 spl-token = { version = "9", features = ["no-entrypoint"] }
-spl-token-interface = "2"
 time = { version = "0.3", features = ["macros", "formatting", "parsing"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync", "net", "test-util"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync", "net", "signal", "test-util"] }
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

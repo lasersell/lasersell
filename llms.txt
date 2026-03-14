@@ -2,16 +2,18 @@
 
 > Open-source Solana exit daemon. Automated exits. Real-time position monitoring. Non-custodial.
 
-LaserSell is a CLI daemon that automatically sells Solana tokens when your exit conditions are met. It connects to the Exit Intelligence stream, a server-side position monitor that watches your holdings in real time and delivers ready-to-sign exit transactions the moment your triggers fire.
+LaserSell CLI is a daemon that automatically sells Solana tokens when your exit conditions are met. It connects to the LaserSell stream, a server-side position monitor that watches your holdings in real time and delivers ready-to-sign exit transactions the moment your triggers fire.
 
 ## What the CLI does
 
-- Monitors your Solana positions in real time via the Exit Intelligence WebSocket stream
-- Auto-sells when exit conditions are met (take-profit, stop-loss, trailing stop, deadline timeout, sell-on-graduation)
+- Monitors your Solana positions in real time via the LaserSell WebSocket stream
+- Auto-sells when exit conditions are met (take-profit, stop-loss, trailing stop, deadline timeout, sell-on-graduation, exit ladder, liquidity guard, breakeven trail)
 - Signs transactions locally (non-custodial — private keys never leave your machine)
 - Submits via configurable backends: Helius Sender (default), Astralane, or direct RPC
-- Live terminal dashboard (TUI) with real-time PnL, session status, and interactive controls
-- Headless server mode (--no-tui) for always-on VPS deployment
+- Copy trading: watch other wallets and optionally auto-buy when they buy
+- Wallet registration: proves ownership via ed25519 signature before connecting
+- Headless operation with structured log output for VPS/server deployments
+- Graceful shutdown via Ctrl+C
 
 ## Supported DEXs
 
@@ -24,8 +26,11 @@ Pump.fun, PumpSwap, Raydium (Launchpad, CPMM), Meteora (DBC, DAMM v2), Bags.fm. 
 - **Trailing stop**: track peak profit, exit when it drops a configured % from peak
 - **Deadline timeout**: force-sell after N seconds
 - **Sell-on-graduation**: auto-sell when a token graduates to a new DEX (e.g. Pump.fun -> PumpSwap)
+- **Exit ladder (take-profit levels)**: sell partial amounts at multiple profit thresholds, each with optional trailing stop
+- **Liquidity guard**: monitor pool depth and exit when liquidity drops below safe threshold
+- **Breakeven trail**: trailing stop that activates once position breaks even
 
-All strategies can be combined. At least one must be active.
+All strategies can be combined. At least one must be active (including take-profit levels).
 
 ## Installation
 
@@ -48,22 +53,21 @@ For a full walkthrough from install to your first automated sell, read: https://
 
 Config lives at `~/.lasersell/config.yml`. Key sections:
 
-- `account`: RPC endpoint, API key, keypair path, send target
-- `strategy`: target_profit, stop_loss, trailing_stop, deadline_timeout, sell_on_graduation
+- `account`: RPC endpoint, API key, keypair path, send target, tip lamports
+- `strategy`: target_profit, stop_loss, trailing_stop, deadline_timeout, sell_on_graduation, take_profit_levels, liquidity_guard, breakeven_trail
 - `sell`: slippage settings, retry count, confirm timeout
+- `watch_wallets`: list of wallets to copy trade, each with optional auto_buy (SOL and USD1 amounts)
 
 Override with `-f path/to/config.yml` or environment variables (LASERSELL_RPC_URL, LASERSELL_API_KEY, etc.).
 
-## TUI commands
+## CLI flags
 
-Press Tab to switch to the command pane:
-- `set tp 20%` — change take-profit
-- `set sl 5%` — change stop-loss
-- `set ts 3%` — change trailing stop
-- `set timeout 60` — change deadline
-- `set graduation on/off` — toggle sell-on-graduation
-- `sell` — manually sell selected position
-- `pause` / `resume` — pause or resume new sessions
+- `lasersell` — start the daemon
+- `lasersell --setup` — interactive onboarding wizard
+- `lasersell --debug` — write debug-level logs to debug.log
+- `lasersell --smoke` — health check: connect, verify, exit
+- `lasersell --export-private-key` — print base58 private key to stdout
+- `lasersell -f /path/to/config.yml` — use a specific config file
 
 ## Security
 
@@ -84,9 +88,19 @@ LaserSell is 2-5x faster than every major Solana trading API at building swap tr
 
 Benchmarks are open-source and reproducible: https://github.com/lasersell/benchmarks
 
+## Built on the LaserSell SDK
+
+The CLI is built on the LaserSell SDK (Rust, TypeScript, Python, Go). The SDK provides:
+- `StrategyConfigBuilder` for fluent strategy construction
+- `StreamSession` for WebSocket stream with priority lanes
+- `prove_ownership()` + `register_wallet()` for wallet registration
+- `connect_with_wallets()` for multi-wallet + watch wallet connections
+- Per-position strategy overrides via `update_position_strategy()`
+
 ## Links
 
 - Website: https://lasersell.io
+- Desktop App: https://lasersell.io
 - Dashboard & API keys: https://app.lasersell.io
 - Documentation: https://docs.lasersell.io
 - CLI repo: https://github.com/lasersell/lasersell

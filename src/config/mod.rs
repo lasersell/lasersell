@@ -19,6 +19,8 @@ pub struct Config {
     pub strategy: StrategyConfig,
     #[serde(default)]
     pub sell: SellConfig,
+    #[serde(default)]
+    pub watch_wallets: Vec<WatchWalletConfig>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -52,7 +54,6 @@ pub struct AccountConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct StrategyConfig {
     pub target_profit: StrategyAmount,
     /// Positive amount; if percent, it's based on detected buy amount.
@@ -64,6 +65,42 @@ pub struct StrategyConfig {
     /// Automatically sell when a token graduates to a new DEX.
     #[serde(default)]
     pub sell_on_graduation: bool,
+    /// Exit ladder: sell partial amounts at multiple profit thresholds.
+    #[serde(default)]
+    pub take_profit_levels: Vec<TakeProfitLevel>,
+    /// Check pool depth before generating exit signals.
+    #[serde(default)]
+    pub liquidity_guard: bool,
+    /// Trailing stop that activates once position breaks even.
+    #[serde(default = "default_trailing_stop")]
+    pub breakeven_trail: StrategyAmount,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TakeProfitLevel {
+    pub profit_pct: f64,
+    pub sell_pct: f64,
+    #[serde(default)]
+    pub trailing_stop_pct: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct WatchWalletConfig {
+    pub pubkey: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub auto_buy: Option<AutoBuyConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AutoBuyConfig {
+    /// SOL amount to auto-buy (human-readable, e.g. 0.1 = 0.1 SOL).
+    #[serde(default)]
+    pub amount: f64,
+    /// USD1 amount to auto-buy (human-readable, e.g. 5.0 = 5 USD1).
+    #[serde(default)]
+    pub amount_usd1: f64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -390,13 +427,15 @@ impl Config {
         let stop_loss_pct = self.strategy.stop_loss.percent_value();
         let trailing_stop_pct = self.strategy.trailing_stop.percent_value();
         let deadline_timeout_sec = self.strategy.deadline_timeout_sec;
+        let has_take_profit_levels = !self.strategy.take_profit_levels.is_empty();
         if target_profit_pct <= 0.0
             && stop_loss_pct <= 0.0
             && trailing_stop_pct <= 0.0
             && deadline_timeout_sec == 0
+            && !has_take_profit_levels
         {
             return Err(anyhow!(
-                "at least one of strategy.target_profit, strategy.stop_loss, strategy.trailing_stop, or strategy.deadline_timeout must be > 0"
+                "at least one of strategy.target_profit, strategy.stop_loss, strategy.trailing_stop, strategy.deadline_timeout, or strategy.take_profit_levels must be set"
             ));
         }
         Ok(())

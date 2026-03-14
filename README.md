@@ -8,6 +8,7 @@
 </p>
 
 <p align="center">
+  <strong>LaserSell CLI</strong><br>
   Open-source Solana exit daemon.<br>
   Automated exits. Real-time position monitoring. Non-custodial.
 </p>
@@ -21,19 +22,15 @@
   <a href="https://x.com/lasersellhq"><img alt="X (Twitter)" src="https://img.shields.io/twitter/follow/lasersellhq?style=flat&logo=x&color=000000"></a>
 </p>
 
-<p align="center">
-  <img alt="LaserSell TUI" src="lasersell-tui.png" width="700">
-</p>
-
 ---
 
 > **New to LaserSell?** Read [Your First Automated Exit](https://www.lasersell.io/blog/your-first-automated-exit) for a full walkthrough from install to your first automated sell.
 
-## What is LaserSell?
+## What is the LaserSell CLI?
 
-LaserSell is an open-source CLI daemon that automatically sells Solana tokens when your exit conditions are met. It connects to the Exit Intelligence stream, a server-side position monitor that watches your holdings in real time and delivers ready-to-sign exit transactions the moment your take-profit, stop-loss, trailing-stop, or deadline triggers.
+The LaserSell CLI is an open-source daemon that automatically sells Solana tokens when your exit conditions are met. It connects to the LaserSell stream, a server-side position monitor that watches your holdings in real time and delivers ready-to-sign exit transactions the moment your strategy triggers.
 
-You configure your strategy, LaserSell runs in your terminal (or headless on a server), and exits execute automatically.
+You configure your strategy, start the daemon, and exits execute automatically.
 
 ```bash
 lasersell --setup   # one-time: RPC, API key, strategy, wallet
@@ -42,28 +39,27 @@ lasersell           # start the daemon
 
 **Supported DEXs:** Pump.fun, PumpSwap, Raydium (Launchpad, CPMM), Meteora (DBC, DAMM v2), Bags.fm. SOL and USD1 quote currencies.
 
-🔒 **Non-custodial and secure by design.** Your private key never leaves your machine. LaserSell stores it in an encrypted keystore, signs transactions locally, and submits directly to the network. The server only sees your public key. It builds unsigned transactions and sends them to you.
+**Non-custodial and secure by design.** Your private key never leaves your machine. LaserSell stores it in an encrypted keystore, signs transactions locally, and submits directly to the network. The server only sees your public key. It builds unsigned transactions and sends them to you.
 
-#### Benefits
+#### Features
+
+- **Automated exit strategies.** Take-profit, stop-loss, trailing stop, deadline timeout, sell-on-graduation, exit ladder (multi-level take-profit), liquidity guard, and breakeven trail. LaserSell auto-sells when any condition is met.
+- **Copy trading.** Watch other wallets and optionally auto-buy when they buy. Monitored positions are managed by the same exit strategy.
+- **Adaptive slippage.** Slippage starts at your configured baseline and bumps automatically on retries, up to a hard cap you control.
+- **Headless operation.** Designed for VPS and server deployments with structured log output.
+- **Graceful shutdown.** Ctrl+C cleanly shuts down all connections.
+
+#### Why LaserSell?
 
 - **Rug pull protection.** Automatically exits positions the moment conditions deteriorate, helping prevent total profit loss.
 - **Built for high frequency trading.** Sub-200ms exit delivery with no polling, no stale data, and adaptive retries.
 - **Locks in profit instantly.** Secures gains the moment a profit window is available, before the market moves against you.
-- **Makes trading feel like a video game.** A live terminal dashboard with real-time PnL, session status, and interactive controls.
 
 ## How it works
 
-LaserSell connects to the Exit Intelligence stream over WebSocket. The stream monitors your positions server-side against your configured thresholds and pushes a **pre-built unsigned transaction** to your client the instant conditions are met. Your client signs locally and submits in one step with no polling and no stale data.
+LaserSell connects to the LaserSell stream over WebSocket. The stream monitors your positions server-side against your configured thresholds and pushes a **pre-built unsigned transaction** to your client the instant conditions are met. Your client signs locally and submits in one step with no polling and no stale data.
 
-This is fundamentally different from bots that poll a price API and then build a transaction (two steps, each with latency). It's also different from limit orders, which sit passively on-chain and get skipped when the price gaps past them during rapid dumps. Exit Intelligence fires an immediate market swap using real-time on-chain data.
-
-## What can you do with the LaserSell CLI?
-
-- **Automated exit strategies.** Set take-profit, stop-loss, trailing stop, deadline timeout, and sell-on-graduation. LaserSell auto-sells when any condition is met. Buy a token in any supported DEX, and LaserSell picks it up automatically.
-- **Live terminal dashboard.** Real-time PnL tracking, session status, strategy controls, and a built-in command prompt.
-- **Headless server deployments.** Run with `--no-tui` on a VPS for always-on operation with plain log output.
-- **On-the-fly strategy changes.** Adjust take-profit, stop-loss, trailing stop, slippage, and timeout from the TUI command pane. Changes apply immediately and persist to disk.
-- **Adaptive slippage.** Slippage starts at your configured baseline and bumps automatically on retries, up to a hard cap you control.
+This is fundamentally different from bots that poll a price API and then build a transaction (two steps, each with latency). It's also different from limit orders, which sit passively on-chain and get skipped when the price gaps past them during rapid dumps. The stream fires an immediate market swap using real-time on-chain data.
 
 ## Installation
 
@@ -99,22 +95,7 @@ Config and keystore are saved to `~/.lasersell/`.
 lasersell
 ```
 
-LaserSell connects to the Exit Intelligence stream, monitors your positions, and auto-sells when your strategy triggers.
-
-### 4. Adjust on the fly
-
-Inside the TUI, press `Tab` to switch to the command pane:
-
-```
-set tp 20%          # change take-profit to 20%
-set sl 5%           # set stop-loss to 5%
-set ts 3%           # set trailing stop to 3%
-set timeout 60      # force-sell after 60 seconds
-set graduation on   # auto-sell when token graduates to a new DEX
-sell                 # manually sell the selected position
-pause / resume       # pause or resume new sessions
-?                    # show all commands
-```
+LaserSell connects to the stream, monitors your positions, and auto-sells when your strategy triggers. Press Ctrl+C to gracefully shut down.
 
 ## Configuration
 
@@ -132,12 +113,22 @@ strategy:
   stop_loss: "10%"           # stop-loss as % of buy amount (0% disables)
   trailing_stop: "5%"        # exit when profit drops this % of entry from peak (0% disables)
   deadline_timeout: 0        # force-sell after N seconds (0 disables)
-  sell_on_graduation: false   # auto-sell when token graduates to a new DEX (e.g. Pump.fun -> PumpSwap)
+  sell_on_graduation: false  # auto-sell when token graduates (e.g. Pump.fun -> PumpSwap)
+  liquidity_guard: false     # exit when liquidity drops below safe threshold
+  breakeven_trail: "0%"      # trailing stop from breakeven point (0% disables)
+  take_profit_levels: []     # exit ladder: multi-level take-profit (see docs)
 
 sell:
   slippage_pad_bps: 2500     # base slippage (basis points)
   slippage_max_bps: 3000     # hard cap
   max_retries: 3
+
+watch_wallets: []            # copy trading: list of wallets to mirror
+# - pubkey: "WalletPubkeyHere"
+#   label: "trader1"
+#   auto_buy:
+#     amount: 0.1            # SOL amount to auto-buy
+#     amount_usd1: 0.0       # USD1 amount to auto-buy
 ```
 
 See [`config.example.yml`](config.example.yml) for all options with inline documentation.
@@ -160,9 +151,9 @@ See [`config.example.yml`](config.example.yml) for all options with inline docum
 <summary>CLI flags</summary>
 
 ```
-lasersell                          # TUI mode (default)
+lasersell                          # Start the daemon
 lasersell --setup                  # Interactive onboarding wizard
-lasersell --no-tui                 # Headless mode (plain log output)
+lasersell --debug                  # Write debug-level logs to debug.log
 lasersell --smoke                  # Health check: connect, verify, exit
 lasersell --export-private-key     # Print base58 private key to stdout
 lasersell -f /path/to/config.yml   # Use a specific config file
@@ -200,9 +191,13 @@ Learn more at [lasersell.io/security](https://www.lasersell.io/security).
 
 The CLI is built on top of the [LaserSell SDK](https://github.com/lasersell/lasersell-sdk). It's a ready-to-use exit daemon. The SDK is for developers who want to build their own applications, bots, or integrations on top of the LaserSell API.
 
+### How does the CLI relate to the desktop app?
+
+The [LaserSell Desktop App](https://lasersell.io) provides a full GUI with portfolio management, charts, achievements, and more. The CLI is a lightweight alternative for headless servers, VPS deployments, or users who prefer terminal-based workflows.
+
 ### What happens if my machine goes offline?
 
-LaserSell runs locally, so if your machine is off, no exits will fire. For always-on operation, run it on a VPS with `--no-tui`.
+LaserSell runs locally, so if your machine is off, no exits will fire. For always-on operation, run it on a VPS.
 
 ### Do I need a private RPC?
 
@@ -224,6 +219,7 @@ cargo build --features devnet
 |----------|------|
 | Getting started | [Your First Automated Exit](https://www.lasersell.io/blog/your-first-automated-exit) |
 | Website | [lasersell.io](https://lasersell.io) |
+| Desktop App | [lasersell.io](https://lasersell.io) |
 | Dashboard & API keys | [app.lasersell.io](https://app.lasersell.io) |
 | Documentation | [docs.lasersell.io](https://docs.lasersell.io) |
 | Blog | [lasersell.io/blog](https://www.lasersell.io/blog) |

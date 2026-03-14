@@ -1,147 +1,58 @@
-use std::fmt;
-use std::sync::{Arc, OnceLock};
-
 use solana_sdk::pubkey::Pubkey;
-use tokio::sync::mpsc::UnboundedSender;
-use tracing::{field::Field, Event, Subscriber};
-use tracing_subscriber::field::Visit;
-use tracing_subscriber::layer::Context;
-use tracing_subscriber::Layer;
 
-use crate::config::{SellConfig, StrategyConfig};
-use crate::stream::MarketStreamState;
-use crate::util::logging::scrub_sensitive;
-
-static EVENT_TX: OnceLock<UnboundedSender<AppEvent>> = OnceLock::new();
-
-pub fn set_sender(tx: UnboundedSender<AppEvent>) {
-    let _ = EVENT_TX.set(tx);
-}
-
+/// Fire-and-forget event emission. In CLI mode events are logged via tracing.
 pub fn emit(event: AppEvent) {
-    if let Some(tx) = EVENT_TX.get() {
-        let _ = tx.send(event);
-    }
-}
-
-pub fn log_layer() -> EventLogLayer {
-    EventLogLayer
-}
-
-pub struct EventLogLayer;
-
-impl<S> Layer<S> for EventLogLayer
-where
-    S: Subscriber,
-{
-    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-        if EVENT_TX.get().is_none() {
-            return;
+    match &event {
+        AppEvent::Startup { version, wallet_pubkey } => {
+            tracing::info!(event = "startup", version = %version, wallet = %wallet_pubkey);
         }
-
-        let meta = event.metadata();
-        let level = LogLevel::from_tracing(meta.level());
-        let mut visitor = FieldVisitor::default();
-        event.record(&mut visitor);
-
-        if visitor.is_hot_loop_event() && *meta.level() <= tracing::Level::INFO {
-            return;
+        AppEvent::BalanceUpdate { lamports } => {
+            tracing::debug!(event = "balance_update", lamports);
         }
-
-        let event_name = visitor.event.clone();
-        let mut parts = Vec::new();
-        if let Some(name) = event_name.clone() {
-            parts.push(name);
+        AppEvent::Usd1BalanceUpdate { base_units } => {
+            tracing::debug!(event = "usd1_balance_update", base_units);
         }
-        for (key, value) in visitor.fields {
-            if key == "event" {
-                continue;
-            }
-            parts.push(format!("{key}={value}"));
+        AppEvent::MintDetected { mint } => {
+            tracing::info!(event = "mint_detected", mint = %mint);
         }
-        if parts.is_empty() {
-            parts.push(meta.name().to_string());
+        AppEvent::SessionStarted { mint } => {
+            tracing::info!(event = "session_started", mint = %mint);
         }
-
-        let message = scrub_sensitive(&parts.join(" "));
-        let event = event_name.as_ref().map(|value| scrub_sensitive(value));
-        emit(AppEvent::LogLine {
-            level,
-            message,
-            event,
-        });
-    }
-}
-
-#[derive(Default)]
-struct FieldVisitor {
-    event: Option<String>,
-    fields: Vec<(String, String)>,
-    hot_loop_event: bool,
-}
-
-impl FieldVisitor {
-    fn push_field(&mut self, field: &Field, value: String) {
-        if field.name() == "event" {
-            self.event = Some(value.clone());
-            if matches!(value.as_str(), "price_tick") {
-                self.hot_loop_event = true;
+        AppEvent::PositionTokensUpdated { mint, tokens } => {
+            tracing::debug!(event = "position_tokens_updated", mint = %mint, tokens);
+        }
+        AppEvent::CostBasisSet { mint, cost_basis_lamports } => {
+            tracing::info!(event = "cost_basis_set", mint = %mint, cost_basis_lamports);
+        }
+        AppEvent::PnlUpdate { mint, profit_lamports, proceeds_lamports } => {
+            tracing::debug!(event = "pnl_update", mint = %mint, profit_lamports, proceeds_lamports);
+        }
+        AppEvent::SellScheduled { mint, reason, profit_lamports } => {
+            tracing::info!(event = "sell_scheduled", mint = %mint, reason = %reason, profit_lamports);
+        }
+        AppEvent::SellAttempt { mint, attempt, slippage_bps } => {
+            tracing::info!(event = "sell_attempt", mint = %mint, attempt, slippage_bps);
+        }
+        AppEvent::SellRetry { mint, attempt, phase, error } => {
+            tracing::warn!(event = "sell_retry", mint = %mint, attempt, phase = %phase, error = %error);
+        }
+        AppEvent::SellComplete { mint, signature, reason, slippage_bps } => {
+            tracing::info!(event = "sell_complete", mint = %mint, signature = %signature, reason = %reason, slippage_bps);
+        }
+        AppEvent::SessionClosed { mint } => {
+            tracing::info!(event = "session_closed", mint = %mint);
+        }
+        AppEvent::SessionError { mint, error } => {
+            tracing::warn!(event = "session_error", mint = %mint, error = %error);
+        }
+        AppEvent::SolanaWsStatus { connected } => {
+            if *connected {
+                tracing::info!(event = "stream_connected");
+            } else {
+                tracing::warn!(event = "stream_disconnected");
             }
         }
-        if !self.hot_loop_event {
-            self.fields.push((field.name().to_string(), value));
-        }
-    }
-
-    fn is_hot_loop_event(&self) -> bool {
-        self.hot_loop_event
-    }
-}
-
-impl Visit for FieldVisitor {
-    fn record_i64(&mut self, field: &Field, value: i64) {
-        self.push_field(field, value.to_string());
-    }
-
-    fn record_u64(&mut self, field: &Field, value: u64) {
-        self.push_field(field, value.to_string());
-    }
-
-    fn record_bool(&mut self, field: &Field, value: bool) {
-        self.push_field(field, value.to_string());
-    }
-
-    fn record_str(&mut self, field: &Field, value: &str) {
-        self.push_field(field, value.to_string());
-    }
-
-    fn record_f64(&mut self, field: &Field, value: f64) {
-        self.push_field(field, value.to_string());
-    }
-
-    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        self.push_field(field, format!("{value:?}"));
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LogLevel {
-    Trace,
-    Debug,
-    Info,
-    Warn,
-    Error,
-}
-
-impl LogLevel {
-    pub fn from_tracing(level: &tracing::Level) -> Self {
-        match *level {
-            tracing::Level::TRACE => LogLevel::Trace,
-            tracing::Level::DEBUG => LogLevel::Debug,
-            tracing::Level::INFO => LogLevel::Info,
-            tracing::Level::WARN => LogLevel::Warn,
-            tracing::Level::ERROR => LogLevel::Error,
-        }
+        AppEvent::Heartbeat => {}
     }
 }
 
@@ -149,7 +60,6 @@ impl LogLevel {
 pub enum AppEvent {
     Startup {
         version: String,
-        devnet: bool,
         wallet_pubkey: Pubkey,
     },
     BalanceUpdate {
@@ -158,25 +68,14 @@ pub enum AppEvent {
     Usd1BalanceUpdate {
         base_units: u64,
     },
-    RpcMetric {
-        duration_ms: u64,
-        ok: bool,
-    },
     SolanaWsStatus {
         connected: bool,
     },
     MintDetected {
         mint: Pubkey,
-        token_account: Pubkey,
     },
     SessionStarted {
         mint: Pubkey,
-        token_program: Pubkey,
-        started_at_ms: u64,
-    },
-    SessionStreamState {
-        mint: Pubkey,
-        stream_state: Arc<dyn MarketStreamState>,
     },
     PositionTokensUpdated {
         mint: Pubkey,
@@ -220,26 +119,10 @@ pub enum AppEvent {
         mint: Pubkey,
         error: String,
     },
-    PauseState {
-        paused: bool,
-    },
     Heartbeat,
-    LogLine {
-        level: LogLevel,
-        message: String,
-        event: Option<String>,
-    },
 }
 
 #[derive(Clone, Debug)]
 pub enum AppCommand {
     Quit,
-    TogglePauseNewSessions,
-    RequestExitSignal {
-        mint: Pubkey,
-    },
-    ApplySettings {
-        strategy: StrategyConfig,
-        sell: SellConfig,
-    },
 }

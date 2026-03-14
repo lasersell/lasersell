@@ -13,12 +13,12 @@ use solana_sdk::signer::Signer;
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::config::{AccountConfig, Config, SellConfig, StrategyAmount, StrategyConfig};
-use crate::ui::format::parse_percent_to_bps;
+use crate::util::format::parse_percent_to_bps;
 use crate::util::support;
 use crate::wallet;
 
 const SOLANA_DERIVATION_PATH: &str = "m/44'/501'/0'/0'";
-const DEFAULT_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
+const DEFAULT_RPC_URL: &str = "https://solana-rpc.publicnode.com";
 
 fn default_keystore_path_for_config(config_path: &Path) -> PathBuf {
     config_path
@@ -772,11 +772,15 @@ fn build_config(inputs: &ConfigInputs, keystore_path: &Path) -> Result<Config> {
             trailing_stop: inputs.trailing_stop.clone(),
             deadline_timeout_sec: inputs.sell_timeout_sec,
             sell_on_graduation: inputs.sell_on_graduation,
+            take_profit_levels: Vec::new(),
+            liquidity_guard: false,
+            breakeven_trail: StrategyAmount::Percent(0.0),
         },
         sell: SellConfig {
             slippage_max_bps: inputs.slippage_max_bps,
             ..SellConfig::default()
         },
+        watch_wallets: Vec::new(),
     })
 }
 

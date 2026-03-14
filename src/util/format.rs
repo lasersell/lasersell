@@ -1,10 +1,5 @@
 use anyhow::{anyhow, Result};
 
-pub fn format_bps_percent(bps: u16) -> String {
-    let pct = (bps as f64) / 100.0;
-    format!("{pct:.2}%")
-}
-
 pub fn parse_percent_to_bps(raw: &str, field: &str) -> Result<u16> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {

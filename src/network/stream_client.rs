@@ -1,9 +1,11 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use lasersell_sdk::exit_api::{ExitApiClient, ExitApiClientOptions};
 use lasersell_sdk::stream::client::{
     StreamClient as SdkStreamClient, StreamConfigure, StreamSender,
 };
-use lasersell_sdk::stream::proto::{MarketContextMsg, ServerMessage, StrategyConfigMsg};
+use lasersell_sdk::stream::proto::{
+    MarketContextMsg, ServerMessage, StrategyConfigMsg, WatchWalletEntryMsg,
+};
 use lasersell_sdk::stream::session::{StreamEvent as SdkStreamEvent, StreamSession};
 use secrecy::{ExposeSecret, SecretString};
 use solana_sdk::signature::Keypair;
@@ -20,40 +22,19 @@ pub struct StreamClient {
     deadline_timeout_sec: u64,
     send_mode: Option<String>,
     tip_lamports: Option<u64>,
+    watch_wallets: Vec<WatchWalletEntryMsg>,
 }
 
 #[derive(Clone, Debug)]
 pub struct StreamHandle {
     sender: StreamSender,
-    cmd_tx: mpsc::UnboundedSender<StreamCommand>,
-}
-
-#[derive(Debug, Clone)]
-enum StreamCommand {
-    UpdateStrategy {
-        strategy: StrategyConfigMsg,
-        deadline_timeout_sec: u64,
-    },
 }
 
 impl StreamHandle {
-    pub fn update_strategy(
-        &self,
-        strategy: StrategyConfigMsg,
-        deadline_timeout_sec: u64,
-    ) -> Result<()> {
-        self.cmd_tx
-            .send(StreamCommand::UpdateStrategy {
-                strategy,
-                deadline_timeout_sec,
-            })
-            .map_err(|err| anyhow!("queue update_strategy: {err}"))
-    }
-
     pub fn request_exit_signal(&self, position_id: u64, slippage_bps: Option<u16>) -> Result<()> {
         self.sender
             .request_exit_signal(position_id, slippage_bps)
-            .map_err(|err| anyhow!("send request_exit_signal: {err}"))
+            .map_err(|err| anyhow::anyhow!("send request_exit_signal: {err}"))
     }
 }
 
@@ -114,6 +95,7 @@ impl StreamClient {
         deadline_timeout_sec: u64,
         send_mode: Option<String>,
         tip_lamports: Option<u64>,
+        watch_wallets: Vec<WatchWalletEntryMsg>,
     ) -> Self {
         Self {
             sdk: SdkStreamClient::new(api_key.clone()).with_local_mode(local),
@@ -124,6 +106,7 @@ impl StreamClient {
             deadline_timeout_sec,
             send_mode,
             tip_lamports,
+            watch_wallets,
         }
     }
 
@@ -139,13 +122,13 @@ impl StreamClient {
                 Some(SecretString::new(api_key_trimmed)),
                 ExitApiClientOptions::default(),
             )
-            .context("build exit-api client for wallet registration")?
+            .context("build LaserSell API client for wallet registration")?
             .with_local_mode(self.local);
-            if let Err(e) = client.register_wallet(&proof, None).await {
-                warn!(event = "wallet_registration_failed", error = %e);
-            } else {
-                info!(event = "wallet_registered", wallet = %self.wallet_pubkey);
-            }
+            client
+                .register_wallet(&proof, None)
+                .await
+                .context("register wallet ownership with LaserSell API")?;
+            info!(event = "wallet_registered", wallet = %self.wallet_pubkey);
         }
 
         let mut configure =
@@ -153,6 +136,7 @@ impl StreamClient {
         configure.deadline_timeout_sec = self.deadline_timeout_sec;
         configure.send_mode = self.send_mode.clone();
         configure.tip_lamports = self.tip_lamports;
+        configure.watch_wallets = self.watch_wallets.clone();
         let mut session = StreamSession::connect(&self.sdk, configure)
             .await
             .context("connect to stream server")?;
@@ -162,42 +146,21 @@ impl StreamClient {
         session.enable_lanes(64);
 
         let sender = session.sender();
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<StreamCommand>();
-        let stream_handle = StreamHandle {
-            sender: sender.clone(),
-            cmd_tx,
-        };
+        let stream_handle = StreamHandle { sender };
 
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let _ = event_tx.send(StreamEvent::ConnectionStatus { connected: true });
 
         tokio::spawn(async move {
-            let mut commands_open = true;
             loop {
-                tokio::select! {
-                    maybe_cmd = cmd_rx.recv(), if commands_open => {
-                        match maybe_cmd {
-                            Some(StreamCommand::UpdateStrategy { strategy, deadline_timeout_sec }) => {
-                                if let Err(err) = session.update_strategy_with_deadline(strategy, deadline_timeout_sec) {
-                                    warn!(event = "stream_update_strategy_failed", error = %err);
-                                }
-                            }
-                            None => {
-                                commands_open = false;
-                            }
-                        }
-                    }
-                    maybe_evt = session.recv() => {
-                        let Some(evt) = maybe_evt else {
-                            warn!(event = "stream_session_ended");
-                            let _ = event_tx.send(StreamEvent::ConnectionStatus { connected: false });
-                            break;
-                        };
-                        if let Some(mapped) = map_session_event(evt) {
-                            if event_tx.send(mapped).is_err() {
-                                break;
-                            }
-                        }
+                let Some(evt) = session.recv().await else {
+                    warn!(event = "stream_session_ended");
+                    let _ = event_tx.send(StreamEvent::ConnectionStatus { connected: false });
+                    break;
+                };
+                if let Some(mapped) = map_session_event(evt) {
+                    if event_tx.send(mapped).is_err() {
+                        break;
                     }
                 }
             }
@@ -263,7 +226,20 @@ fn map_session_event(evt: SdkStreamEvent) -> Option<StreamEvent> {
                 None
             }
         }
-        SdkStreamEvent::LiquiditySnapshot { .. } => None,
+        SdkStreamEvent::LiquiditySnapshot { handle, message } => {
+            if let (Some(h), ServerMessage::LiquiditySnapshot { liquidity_trend, bands, .. }) =
+                (&handle, &message)
+            {
+                info!(
+                    event = "liquidity_snapshot",
+                    position_id = h.position_id,
+                    mint = %h.mint,
+                    trend = %liquidity_trend,
+                    bands = bands.len(),
+                );
+            }
+            None
+        }
         SdkStreamEvent::TradeTick { .. } => None,
     }
 }
@@ -344,7 +320,15 @@ fn map_server_event(msg: ServerMessage) -> Option<StreamEvent> {
         }),
         ServerMessage::HelloOk { .. } | ServerMessage::Pong { .. } => None,
         ServerMessage::PnlUpdate { .. } => None,
-        ServerMessage::LiquiditySnapshot { .. } => None,
+        ServerMessage::LiquiditySnapshot { position_id, liquidity_trend, bands, .. } => {
+            info!(
+                event = "liquidity_snapshot",
+                position_id,
+                trend = %liquidity_trend,
+                bands = bands.len(),
+            );
+            None
+        }
         ServerMessage::TradeTick { .. } => None,
         ServerMessage::Error { code, message } => {
             warn!(event = "stream_server_error", code = %code, message = %message);

@@ -1,26 +1,25 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use lasersell_sdk::exit_api::{
-    BuildSellTxRequest, ExitApiClient, ExitApiClientOptions, SellOutput,
+use lasersell_sdk::stream::client::StrategyConfigBuilder;
+use lasersell_sdk::stream::proto::{
+    AutoBuyConfigMsg, MarketContextMsg, StrategyConfigMsg, TakeProfitLevelMsg,
+    WatchWalletEntryMsg,
 };
-use lasersell_sdk::stream::proto::{MarketContextMsg, StrategyConfigMsg};
 use lasersell_sdk::tx::{SendTarget, TxSubmitError};
 use parking_lot::RwLock as ParkingRwLock;
-use secrecy::{ExposeSecret, SecretString};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, info, warn};
 
-use crate::config::{Config, SellConfig, StrategyConfig};
+use crate::config::{Config, SellConfig, StrategyConfig, WatchWalletConfig};
 use crate::events::{emit, AppCommand, AppEvent};
 use crate::market::context_from_msg::market_context_from_msg;
-use crate::market::context_to_msg::market_context_to_msg;
-use crate::market::{usd1_mint, MarketContext, MarketType};
+use crate::market::{usd1_mint, MarketContext};
 use crate::network::{rpc_result, StreamClient, StreamEvent, StreamHandle};
 use crate::stream::InMemoryMarketStreamState;
 use crate::tx::{send_tx, sign_unsigned_tx};
@@ -31,7 +30,7 @@ const BALANCE_POLL_SECS: u64 = 5;
 const BALANCE_POLL_PUBLIC_RPC_SECS: u64 = 15;
 
 fn balance_poll_interval(rpc_url: &str) -> Duration {
-    if rpc_url.trim().contains("api.mainnet-beta.solana.com") {
+    if rpc_url.trim().contains("publicnode.com") || rpc_url.trim().contains("api.mainnet-beta.solana.com") {
         Duration::from_secs(BALANCE_POLL_PUBLIC_RPC_SECS)
     } else {
         Duration::from_secs(BALANCE_POLL_SECS)
@@ -43,31 +42,24 @@ struct PositionSnapshot {
     position_id: u64,
     token_program: Option<String>,
     tokens: u64,
-    market_context: Option<MarketContext>,
 }
 
 enum LoopControl {
-    Continue,
     Break,
     DropCommands,
 }
 
 struct AppEngine {
-    runtime_strategy: Arc<ParkingRwLock<StrategyConfig>>,
     runtime_sell: Arc<ParkingRwLock<SellConfig>>,
-    wallet_pubkey: Pubkey,
     keypair_bytes: [u8; 64],
     rpc_http: reqwest::Client,
     rpc_url: String,
     send_target: SendTarget,
-    send_mode: String,
-    exit_api: Arc<ExitApiClient>,
     stream_handle: Arc<StreamHandle>,
     market_contexts: Arc<ParkingRwLock<HashMap<Pubkey, MarketContext>>>,
     stream_states: Arc<ParkingRwLock<HashMap<Pubkey, Arc<InMemoryMarketStreamState>>>>,
     position_snapshots: Arc<ParkingRwLock<HashMap<Pubkey, PositionSnapshot>>>,
     in_flight_auto_sells: Arc<Mutex<HashMap<u64, mpsc::UnboundedSender<String>>>>,
-    paused: bool,
 }
 
 pub async fn run(
@@ -94,7 +86,6 @@ pub async fn run(
                 }
             } => {
                 match engine.handle_user_command(cmd).await? {
-                    LoopControl::Continue => {}
                     LoopControl::Break => break,
                     LoopControl::DropCommands => {
                         cmd_rx = None;
@@ -115,7 +106,6 @@ impl AppEngine {
         cfg: Config,
         keypair: Keypair,
     ) -> Result<(Self, mpsc::UnboundedReceiver<StreamEvent>)> {
-        let runtime_strategy = Arc::new(ParkingRwLock::new(cfg.strategy.clone()));
         let runtime_sell = Arc::new(ParkingRwLock::new(cfg.sell.clone()));
         let wallet_pubkey = cfg.wallet_pubkey(&keypair)?;
         let keypair_bytes = keypair.to_bytes();
@@ -126,7 +116,6 @@ impl AppEngine {
             .build()?;
         let rpc_url = cfg.http_rpc_url();
         let send_target = cfg.resolve_send_target()?;
-        let send_mode = cfg.send_mode_str().to_string();
 
         let balance_http = reqwest::Client::builder()
             .no_proxy()
@@ -136,14 +125,8 @@ impl AppEngine {
         spawn_wallet_balance_poller(balance_http.clone(), rpc_url.clone(), wallet_pubkey);
         spawn_usd1_balance_poller(balance_http, rpc_url.clone(), wallet_pubkey);
 
-        let exit_api = Arc::new(build_exit_api_client(
-            &cfg.account.api_key,
-            cfg.account.local,
-            cfg.exit_api_connect_timeout(),
-            cfg.exit_api_request_timeout(),
-        )?);
-
         let stream_send_mode = Some(cfg.send_mode_str().to_string());
+        let watch_wallets = build_watch_wallet_entries(&cfg.watch_wallets, &wallet_pubkey.to_string());
         let stream_client = StreamClient::new(
             cfg.account.api_key.clone(),
             cfg.account.local,
@@ -152,6 +135,7 @@ impl AppEngine {
             cfg.strategy.deadline_timeout_sec,
             stream_send_mode,
             cfg.account.tip_lamports,
+            watch_wallets,
         );
         let (stream_handle, evt_rx) = stream_client.connect(&keypair).await?;
         let stream_handle = Arc::new(stream_handle);
@@ -171,21 +155,16 @@ impl AppEngine {
 
         Ok((
             Self {
-                runtime_strategy,
                 runtime_sell,
-                wallet_pubkey,
                 keypair_bytes,
                 rpc_http,
                 rpc_url,
                 send_target,
-                send_mode,
-                exit_api,
                 stream_handle,
                 market_contexts,
                 stream_states,
                 position_snapshots,
                 in_flight_auto_sells,
-                paused: false,
             },
             evt_rx,
         ))
@@ -277,28 +256,6 @@ impl AppEngine {
     async fn handle_user_command(&mut self, cmd: Option<AppCommand>) -> Result<LoopControl> {
         match cmd {
             Some(AppCommand::Quit) => Ok(LoopControl::Break),
-            Some(AppCommand::TogglePauseNewSessions) => {
-                self.paused = !self.paused;
-                emit(AppEvent::PauseState {
-                    paused: self.paused,
-                });
-                Ok(LoopControl::Continue)
-            }
-            Some(AppCommand::ApplySettings { strategy, sell }) => {
-                *self.runtime_strategy.write() = strategy.clone();
-                *self.runtime_sell.write() = sell.clone();
-                if let Err(err) = self
-                    .stream_handle
-                    .update_strategy(strategy_to_msg(&strategy), strategy.deadline_timeout_sec)
-                {
-                    warn!(event = "stream_update_strategy_failed", error = %err);
-                }
-                Ok(LoopControl::Continue)
-            }
-            Some(AppCommand::RequestExitSignal { mint }) => {
-                self.handle_manual_sell_request(mint).await;
-                Ok(LoopControl::Continue)
-            }
             None => Ok(LoopControl::DropCommands),
         }
     }
@@ -316,7 +273,6 @@ impl AppEngine {
                     position_id: 0,
                     token_program: None,
                     tokens: 0,
-                    market_context: None,
                 });
                 if token_program.is_some() {
                     entry.token_program = token_program;
@@ -336,7 +292,7 @@ impl AppEngine {
         position_id: u64,
         mint: String,
         token_program: Option<String>,
-        token_account: String,
+        _token_account: String,
         tokens: u64,
         entry_quote_units: u64,
         _slot: u64,
@@ -344,51 +300,29 @@ impl AppEngine {
     ) {
         info!(event = "app_position_opened", position_id, mint = %mint, tokens);
         if let Ok(mint) = Pubkey::from_str(&mint) {
-            let parsed_context = match apply_market_context_update(
+            let parsed_context = apply_market_context_update(
                 mint,
                 market_context,
                 self.market_contexts.as_ref(),
-            ) {
-                Ok(context) => context,
-                Err(err) => {
-                    emit(AppEvent::SessionError {
-                        mint,
-                        error: err.to_string(),
-                    });
-                    None
-                }
-            };
+            );
             let context_for_state = parsed_context
-                .clone()
-                .or_else(|| self.market_contexts.read().get(&mint).cloned());
+                .or_else(|| self.market_contexts.read().get(&mint).copied());
             upsert_market_stream_state(
                 self.stream_states.as_ref(),
                 mint,
                 context_for_state.as_ref(),
                 Some(tokens),
             );
-            let token_program_pubkey = token_program
-                .as_deref()
-                .and_then(|s| Pubkey::from_str(s).ok())
-                .unwrap_or_else(spl_token::id);
             self.position_snapshots.write().insert(
                 mint,
                 PositionSnapshot {
                     position_id,
                     token_program,
                     tokens,
-                    market_context: parsed_context,
                 },
             );
-            emit(AppEvent::SessionStarted {
-                mint,
-                token_program: token_program_pubkey,
-                started_at_ms: now_ms(),
-            });
-            emit(AppEvent::MintDetected {
-                mint,
-                token_account: Pubkey::from_str(&token_account).unwrap_or_default(),
-            });
+            emit(AppEvent::SessionStarted { mint });
+            emit(AppEvent::MintDetected { mint });
             emit(AppEvent::PositionTokensUpdated { mint, tokens });
             if entry_quote_units > 0 {
                 emit(AppEvent::CostBasisSet {
@@ -446,7 +380,7 @@ impl AppEngine {
         unsigned_tx_b64: String,
     ) -> Result<()> {
         process_exit_signal_with_tx(
-            self.paused,
+            false, // CLI does not support pause/resume
             position_id,
             mint,
             token_program,
@@ -469,22 +403,6 @@ impl AppEngine {
         .await
     }
 
-    async fn handle_manual_sell_request(&self, mint: Pubkey) {
-        trigger_manual_sell(
-            mint,
-            self.exit_api.clone(),
-            self.rpc_http.clone(),
-            self.keypair_bytes,
-            self.wallet_pubkey,
-            self.rpc_url.clone(),
-            self.send_target.clone(),
-            self.send_mode.clone(),
-            self.runtime_sell.clone(),
-            self.position_snapshots.clone(),
-            self.market_contexts.clone(),
-        )
-        .await;
-    }
 }
 
 fn stream_event_label(evt: &StreamEvent) -> &'static str {
@@ -536,23 +454,13 @@ async fn process_exit_signal_with_tx(
         }
     };
 
-    let parsed_context = match apply_market_context_update(
+    let parsed_context = apply_market_context_update(
         mint_pubkey,
         market_context_msg,
         market_contexts.as_ref(),
-    ) {
-        Ok(context) => context,
-        Err(err) => {
-            emit(AppEvent::SessionError {
-                mint: mint_pubkey,
-                error: err.to_string(),
-            });
-            None
-        }
-    };
+    );
     let context_for_state = parsed_context
-        .clone()
-        .or_else(|| market_contexts.read().get(&mint_pubkey).cloned());
+        .or_else(|| market_contexts.read().get(&mint_pubkey).copied());
     upsert_market_stream_state(
         stream_states.as_ref(),
         mint_pubkey,
@@ -566,9 +474,6 @@ async fn process_exit_signal_with_tx(
             position_id,
             token_program: token_program.clone(),
             tokens: position_tokens,
-            market_context: parsed_context
-                .clone()
-                .or_else(|| market_contexts.read().get(&mint_pubkey).cloned()),
         },
     );
 
@@ -597,24 +502,8 @@ async fn process_exit_signal_with_tx(
     let stream_handle = stream_handle.clone();
     tokio::spawn(async move {
         let sell_reason = canonical_sell_reason(&reason).to_string();
-        let token_program =
-            match resolve_token_program(&rpc_http, &rpc_url, &token_program, mint_pubkey).await {
-                Ok(value) => value,
-                Err(err) => {
-                    emit(AppEvent::SessionError {
-                        mint: mint_pubkey,
-                        error: err.to_string(),
-                    });
-                    in_flight_auto_sells.lock().await.remove(&position_id);
-                    return;
-                }
-            };
 
-        emit(AppEvent::SessionStarted {
-            mint: mint_pubkey,
-            token_program,
-            started_at_ms: now_ms(),
-        });
+        emit(AppEvent::SessionStarted { mint: mint_pubkey });
         emit(AppEvent::PositionTokensUpdated {
             mint: mint_pubkey,
             tokens: position_tokens,
@@ -809,289 +698,41 @@ fn bumped_slippage_bps(current: u16, refreshes_used: usize, cfg: &SellConfig) ->
     current.saturating_add(bump).min(cfg.slippage_max_bps)
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn trigger_manual_sell(
-    mint: Pubkey,
-    exit_api: Arc<ExitApiClient>,
-    rpc_http: reqwest::Client,
-    keypair_bytes: [u8; 64],
-    wallet_pubkey: Pubkey,
-    rpc_url: String,
-    send_target: SendTarget,
-    send_mode: String,
-    runtime_sell: Arc<ParkingRwLock<SellConfig>>,
-    position_snapshots: Arc<ParkingRwLock<HashMap<Pubkey, PositionSnapshot>>>,
-    market_contexts: Arc<ParkingRwLock<HashMap<Pubkey, MarketContext>>>,
-) {
-    let snapshot = position_snapshots.read().get(&mint).cloned();
-    let Some(snapshot) = snapshot else {
-        warn!(event = "manual_sell_missing_position", mint = %mint);
-        emit(AppEvent::SessionError {
-            mint,
-            error: "manual sell failed: no position data for mint".to_string(),
-        });
-        return;
-    };
-
-    if snapshot.tokens == 0 {
-        warn!(event = "manual_sell_zero_tokens", mint = %mint);
-        emit(AppEvent::SessionError {
-            mint,
-            error: "manual sell failed: position token balance is 0".to_string(),
-        });
-        return;
-    }
-
-    let sell_cfg = runtime_sell.read().clone();
-    let slippage_bps = sell_cfg.slippage_pad_bps;
-    let confirm_timeout_sec = sell_cfg.confirm_timeout_sec;
-    let token_program_hint = snapshot.token_program.clone();
-    let tokens = snapshot.tokens;
-    let market_context = snapshot
-        .market_context
-        .clone()
-        .or_else(|| market_contexts.read().get(&mint).cloned());
-
-    let exit_api = exit_api.clone();
-    let rpc_http = rpc_http.clone();
-    let rpc_url = rpc_url.clone();
-    tokio::spawn(async move {
-        let sell_reason = canonical_sell_reason("manual_sell").to_string();
-        let token_program =
-            match resolve_token_program(&rpc_http, &rpc_url, &token_program_hint, mint).await {
-                Ok(value) => value,
-                Err(err) => {
-                    emit(AppEvent::SessionError {
-                        mint,
-                        error: err.to_string(),
-                    });
-                    return;
-                }
-            };
-
-        emit(AppEvent::SessionStarted {
-            mint,
-            token_program,
-            started_at_ms: now_ms(),
-        });
-        emit(AppEvent::PositionTokensUpdated { mint, tokens });
-        info!(
-            event = "sell_scheduled",
-            mint = %mint,
-            reason = %sell_reason,
-            profit_lamports = 0i64
-        );
-        emit(AppEvent::SellScheduled {
-            mint,
-            reason: sell_reason.clone(),
-            profit_lamports: 0,
-        });
-        emit(AppEvent::SellAttempt {
-            mint,
-            attempt: 1,
-            slippage_bps,
-        });
-
-        let result = execute_manual_sell(
-            exit_api,
-            rpc_http,
-            keypair_bytes,
-            mint,
-            wallet_pubkey,
-            rpc_url,
-            send_target,
-            send_mode,
-            tokens,
-            slippage_bps,
-            confirm_timeout_sec,
-            market_context,
-        )
-        .await;
-
-        match result {
-            Ok(signature) => {
-                info!(
-                    event = "sell_complete",
-                    mint = %mint,
-                    signature = %signature,
-                    reason = %sell_reason,
-                    slippage_bps
-                );
-                emit(AppEvent::SellComplete {
-                    mint,
-                    signature,
-                    reason: sell_reason.clone(),
-                    slippage_bps,
-                });
-                emit(AppEvent::SessionClosed { mint });
-            }
-            Err(err) => {
-                warn!(event = "manual_sell_failed", mint = %mint, error = %err);
-                warn!(event = "session_error", mint = %mint, error = %err);
-                emit(AppEvent::SessionError {
-                    mint,
-                    error: err.to_string(),
-                });
-            }
-        }
-    });
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn execute_manual_sell(
-    exit_api: Arc<ExitApiClient>,
-    rpc_http: reqwest::Client,
-    keypair_bytes: [u8; 64],
-    mint: Pubkey,
-    wallet_pubkey: Pubkey,
-    rpc_url: String,
-    send_target: SendTarget,
-    send_mode: String,
-    tokens: u64,
-    slippage_bps: u16,
-    confirm_timeout_sec: u64,
-    market_context: Option<MarketContext>,
-) -> Result<String> {
-    let request = build_manual_sell_request(
-        mint,
-        wallet_pubkey,
-        tokens,
-        slippage_bps,
-        market_context.as_ref(),
-        &send_mode,
-    )?;
-
-    let unsigned_tx_b64 = exit_api
-        .build_sell_tx_b64(&request)
-        .await
-        .context("build sell tx")?;
-    let keypair = Keypair::try_from(&keypair_bytes[..]).context("decode keypair")?;
-    let signed_tx = sign_unsigned_tx(&unsigned_tx_b64, &keypair)?;
-    let signature = send_tx(
-        &rpc_http,
-        &rpc_url,
-        &signed_tx,
-        &send_target,
-        Duration::from_secs(confirm_timeout_sec),
-    )
-    .await?;
-    Ok(signature)
-}
-
-fn build_exit_api_client(
-    api_key: &SecretString,
-    local: bool,
-    connect_timeout: Duration,
-    request_timeout: Duration,
-) -> Result<ExitApiClient> {
-    let options = ExitApiClientOptions {
-        connect_timeout,
-        attempt_timeout: request_timeout,
-        ..ExitApiClientOptions::default()
-    };
-    ExitApiClient::with_options(optional_api_key(api_key), options)
-        .map(|client| client.with_local_mode(local))
-        .context("build exit-api client")
-}
-
-fn optional_api_key(api_key: &SecretString) -> Option<SecretString> {
-    let trimmed = api_key.expose_secret().trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    Some(SecretString::new(trimmed.to_string()))
-}
-
-fn build_manual_sell_request(
-    mint: Pubkey,
-    wallet_pubkey: Pubkey,
-    amount_tokens: u64,
-    slippage_bps: u16,
-    market_context: Option<&MarketContext>,
-    send_mode: &str,
-) -> Result<BuildSellTxRequest> {
-    if amount_tokens == 0 {
-        return Err(anyhow!("manual sell failed: amount_tokens must be > 0"));
-    }
-
-    Ok(BuildSellTxRequest {
-        mint: mint.to_string(),
-        user_pubkey: wallet_pubkey.to_string(),
-        amount_tokens,
-        output: infer_manual_sell_output(market_context),
-        slippage_bps,
-        market_context: market_context.map(market_context_to_msg),
-        send_mode: Some(send_mode.to_string()),
-        ..Default::default()
-    })
-}
-
-fn infer_manual_sell_output(market_context: Option<&MarketContext>) -> SellOutput {
-    let Some(context) = market_context else {
-        return SellOutput::Sol;
-    };
-    match context.market_type {
-        MarketType::MeteoraDbc => {
-            if context
-                .meteora_dbc
-                .as_ref()
-                .map(|ctx| ctx.quote_mint == usd1_mint())
-                .unwrap_or(false)
-            {
-                SellOutput::Usd1
-            } else {
-                SellOutput::Sol
-            }
-        }
-        MarketType::RaydiumLaunchpad => {
-            if context
-                .raydium_launchpad
-                .as_ref()
-                .map(|ctx| ctx.quote_mint == usd1_mint())
-                .unwrap_or(false)
-            {
-                SellOutput::Usd1
-            } else {
-                SellOutput::Sol
-            }
-        }
-        MarketType::RaydiumCpmm => {
-            if context
-                .raydium_cpmm
-                .as_ref()
-                .map(|ctx| ctx.quote_mint == usd1_mint())
-                .unwrap_or(false)
-            {
-                SellOutput::Usd1
-            } else {
-                SellOutput::Sol
-            }
-        }
-        MarketType::PumpFun | MarketType::PumpSwap | MarketType::MeteoraDammV2 => SellOutput::Sol,
-    }
-}
-
 fn strategy_to_msg(strategy: &StrategyConfig) -> StrategyConfigMsg {
-    StrategyConfigMsg {
-        target_profit_pct: strategy.target_profit.percent_value(),
-        stop_loss_pct: strategy.stop_loss.percent_value(),
-        trailing_stop_pct: strategy.trailing_stop.percent_value(),
-        sell_on_graduation: strategy.sell_on_graduation,
-        ..Default::default()
+    let mut builder = StrategyConfigBuilder::new()
+        .target_profit_pct(strategy.target_profit.percent_value())
+        .stop_loss_pct(strategy.stop_loss.percent_value())
+        .trailing_stop_pct(strategy.trailing_stop.percent_value())
+        .sell_on_graduation(strategy.sell_on_graduation)
+        .liquidity_guard(strategy.liquidity_guard)
+        .breakeven_trail_pct(strategy.breakeven_trail.percent_value());
+
+    if !strategy.take_profit_levels.is_empty() {
+        builder = builder.take_profit_levels(
+            strategy
+                .take_profit_levels
+                .iter()
+                .map(|l| TakeProfitLevelMsg {
+                    profit_pct: l.profit_pct,
+                    sell_pct: l.sell_pct,
+                    trailing_stop_pct: l.trailing_stop_pct,
+                })
+                .collect(),
+        );
     }
+
+    builder.build()
 }
 
 fn apply_market_context_update(
     mint: Pubkey,
     market_context: Option<MarketContextMsg>,
     market_contexts: &ParkingRwLock<HashMap<Pubkey, MarketContext>>,
-) -> Result<Option<MarketContext>> {
-    let Some(msg) = market_context else {
-        return Ok(None);
-    };
-    let context = market_context_from_msg(&msg)?;
-    market_contexts.write().insert(mint, context.clone());
-    Ok(Some(context))
+) -> Option<MarketContext> {
+    let msg = market_context?;
+    let context = market_context_from_msg(&msg);
+    market_contexts.write().insert(mint, context);
+    Some(context)
 }
 
 fn upsert_market_stream_state(
@@ -1130,50 +771,6 @@ fn upsert_market_stream_state(
     if let Some(tokens) = position_tokens {
         state.set_position_tokens(Some(tokens));
     }
-
-    drop(states);
-    emit(AppEvent::SessionStreamState {
-        mint,
-        stream_state: state,
-    });
-}
-
-async fn resolve_token_program(
-    client: &reqwest::Client,
-    rpc_url: &str,
-    token_program_hint: &Option<String>,
-    mint: Pubkey,
-) -> Result<Pubkey> {
-    if let Some(hint) = token_program_hint {
-        if let Ok(program) = Pubkey::from_str(hint) {
-            return Ok(program);
-        }
-    }
-
-    let result = rpc_result(
-        client,
-        rpc_url,
-        "getAccountInfo",
-        serde_json::json!([
-            mint.to_string(),
-            {
-                "encoding": "base64",
-                "commitment": "processed"
-            }
-        ]),
-    )
-    .await?;
-
-    let value = result
-        .get("value")
-        .cloned()
-        .ok_or_else(|| anyhow!("mint account missing"))?;
-    let owner = value
-        .get("owner")
-        .and_then(|value| value.as_str())
-        .ok_or_else(|| anyhow!("mint owner missing"))?;
-    let owner = Pubkey::from_str(owner).context("invalid token program owner")?;
-    Ok(owner)
 }
 
 /// Derive the Associated Token Account address for a wallet + mint.
@@ -1280,69 +877,41 @@ async fn fetch_usd1_balance(
     }
 }
 
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|_| Duration::from_secs(0))
-        .as_millis() as u64
+fn build_watch_wallet_entries(
+    watch_wallets: &[WatchWalletConfig],
+    own_wallet_pubkey: &str,
+) -> Vec<WatchWalletEntryMsg> {
+    watch_wallets
+        .iter()
+        .map(|w| {
+            let auto_buy = w.auto_buy.as_ref().and_then(|ab| {
+                let sol_units = (ab.amount * 1e9) as u64;
+                let usd1_units = if ab.amount_usd1 > 0.0 {
+                    Some((ab.amount_usd1 * 1e6) as u64)
+                } else {
+                    None
+                };
+                if sol_units == 0 && usd1_units.is_none() {
+                    return None;
+                }
+                Some(AutoBuyConfigMsg {
+                    wallet_pubkey: own_wallet_pubkey.to_string(),
+                    amount_quote_units: sol_units,
+                    amount_usd1_units: usd1_units,
+                })
+            });
+            WatchWalletEntryMsg {
+                pubkey: w.pubkey.clone(),
+                auto_buy,
+            }
+        })
+        .collect()
 }
+
 
 #[cfg(test)]
 mod tests {
-    use crate::market::{MarketContext, MeteoraDbcContext};
-
-    use super::{build_manual_sell_request, canonical_sell_reason, usd1_mint};
-    use solana_sdk::pubkey::Pubkey;
-
-    #[test]
-    fn manual_sell_request_serializes_output_and_slippage() {
-        let request =
-            build_manual_sell_request(Pubkey::new_unique(), Pubkey::new_unique(), 42, 1200, None, "helius_sender")
-                .expect("build manual sell request");
-        let serialized = serde_json::to_value(request).expect("serialize request");
-
-        assert_eq!(
-            serialized
-                .get("amount_tokens")
-                .and_then(serde_json::Value::as_u64),
-            Some(42)
-        );
-        assert_eq!(
-            serialized
-                .get("slippage_bps")
-                .and_then(serde_json::Value::as_u64),
-            Some(1200)
-        );
-        assert_eq!(
-            serialized.get("output").and_then(serde_json::Value::as_str),
-            Some("SOL")
-        );
-        assert!(serialized.get("amount").is_none());
-    }
-
-    #[test]
-    fn manual_sell_request_uses_usd1_output_from_market_context() {
-        let market_context = MarketContext::meteora_dbc(MeteoraDbcContext {
-            pool: Pubkey::new_unique(),
-            config: Pubkey::new_unique(),
-            quote_mint: usd1_mint(),
-        });
-        let request = build_manual_sell_request(
-            Pubkey::new_unique(),
-            Pubkey::new_unique(),
-            1,
-            777,
-            Some(&market_context),
-            "helius_sender",
-        )
-        .expect("build manual sell request");
-        let serialized = serde_json::to_value(request).expect("serialize request");
-
-        assert_eq!(
-            serialized.get("output").and_then(serde_json::Value::as_str),
-            Some("USD1")
-        );
-    }
+    use super::canonical_sell_reason;
 
     #[test]
     fn canonical_sell_reason_normalizes_deadline_to_timeout() {

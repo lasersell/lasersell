@@ -25,9 +25,9 @@ mod config;
 mod events;
 mod market;
 mod network;
+mod onboarding;
 mod stream;
 mod tx;
-mod ui;
 mod util;
 mod wallet;
 
@@ -59,7 +59,6 @@ async fn async_main() -> Result<()> {
     // unlock so the user sees the banner while the passphrase prompt is up.
     let update_check_handle = tokio::spawn(util::update_check::check_for_update());
 
-    let use_tui = !(cli.verbose || cli.no_tui);
     let config_path = cli.config_path.clone();
     if let Err(err) = util::paths::ensure_data_dir_exists() {
         eprintln!(
@@ -68,51 +67,43 @@ async fn async_main() -> Result<()> {
         );
     }
     let (cfg, keypair): (config::Config, solana_sdk::signature::Keypair) = if cli.setup {
-        ui::onboarding::run_onboarding(&config_path)?
+        onboarding::run_onboarding(&config_path)?
     } else {
         if !config_path.exists() {
-            if !use_tui {
-                if std::io::stdin().is_terminal() {
-                    ui::onboarding::run_onboarding(&config_path)?
-                } else {
-                    return Err(anyhow!(
-                        "config file {} not found; run --setup in an interactive terminal",
-                        config_path.display()
-                    ));
-                }
+            if std::io::stdin().is_terminal() {
+                onboarding::run_onboarding(&config_path)?
             } else {
-                ui::onboarding::run_onboarding(&config_path)?
+                return Err(anyhow!(
+                    "config file {} not found; run --setup in an interactive terminal",
+                    config_path.display()
+                ));
             }
         } else {
-            let mut cfg = config::Config::load_from_path(&config_path)?;
+            let cfg = config::Config::load_from_path(&config_path)?;
             let keypair_path = PathBuf::from(&cfg.account.keypair_path);
             let wallet_kind = wallet::detect_wallet_file_kind(&keypair_path)?;
             let keypair = match wallet_kind {
                 wallet::WalletFileKind::EncryptedKeystore => {
                     let keystore_pubkey = wallet::read_keystore_pubkey(&keypair_path).ok();
                     wallet::load_keypair_from_path(&keypair_path, || {
-                        if use_tui {
-                            ui::unlock::prompt_passphrase(
-                                "Unlock wallet keystore",
-                                keystore_pubkey.as_deref(),
-                            )
-                        } else {
-                            read_passphrase_non_tui()
-                        }
+                        read_passphrase_cli(keystore_pubkey.as_deref())
                     })?
                 }
                 wallet::WalletFileKind::PlaintextSolanaJson => {
                     let keypair = wallet::load_keypair_from_path(&keypair_path, || {
                         Err(anyhow!("passphrase not required"))
                     })?;
-                    if use_tui {
-                        let migrate = ui::unlock::prompt_yes_no(
+                    if std::io::stdin().is_terminal() {
+                        let migrate = cliclack::confirm(
                             "Plaintext keypair detected. Encrypt this wallet now?",
-                        )?;
+                        )
+                        .initial_value(true)
+                        .interact()
+                        .unwrap_or(false);
                         if migrate {
-                            let passphrase =
-                                ui::unlock::prompt_passphrase("Set keystore passphrase", None)?;
+                            let passphrase = prompt_new_passphrase()?;
                             let keystore_path = wallet::default_keystore_path(&keypair_path);
+                            let mut cfg = cfg.clone();
                             wallet::migrate_plaintext_to_keystore(
                                 &keypair_path,
                                 &keystore_path,
@@ -126,7 +117,7 @@ async fn async_main() -> Result<()> {
                         }
                     } else {
                         eprintln!(
-                            "Warning: plaintext keypair file in use ({}). Run with TUI to migrate.",
+                            "Warning: plaintext keypair file in use ({}). Run --setup to migrate.",
                             keypair_path.display()
                         );
                     }
@@ -137,34 +128,16 @@ async fn async_main() -> Result<()> {
         }
     };
 
-    // Collect the update check result. By now the background request has had
-    // plenty of time to complete (wallet unlock / onboarding happened first).
+    // Collect the update check result.
     let update_available = update_check_handle.await.ok().flatten();
     if let Some(ref update) = update_available {
         util::update_check::print_update_banner(update);
-        // Brief pause so the banner is readable before the TUI clears the screen.
-        tokio::time::sleep(Duration::from_secs(3)).await;
     }
 
     util::logging::init_redactions(vec![
         cfg.account.rpc_url.expose_secret().to_string(),
         cfg.account.api_key.expose_secret().to_string(),
     ]);
-
-    let mut tui_event_rx: Option<mpsc::UnboundedReceiver<events::AppEvent>> = None;
-    if use_tui {
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<events::AppEvent>();
-        events::set_sender(event_tx);
-
-        let (tui_tx, tui_rx) = mpsc::unbounded_channel::<events::AppEvent>();
-        tui_event_rx = Some(tui_rx);
-
-        tokio::spawn(async move {
-            while let Some(event) = event_rx.recv().await {
-                let _ = tui_tx.send(event);
-            }
-        });
-    }
 
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         if cli.debug {
@@ -173,45 +146,23 @@ async fn async_main() -> Result<()> {
             EnvFilter::new("info")
         }
     });
-    let _debug_log_guard = init_tracing(use_tui, cli.debug, filter);
+    let _debug_log_guard = init_tracing(cli.debug, filter);
     let wallet_pubkey = cfg.wallet_pubkey(&keypair)?;
 
     events::emit(events::AppEvent::Startup {
         version: env!("CARGO_PKG_VERSION").to_string(),
-        devnet: false,
         wallet_pubkey,
     });
 
-    let (cmd_tx, cmd_rx) = if use_tui {
-        let (tx, rx) = mpsc::unbounded_channel();
-        (Some(tx), Some(rx))
-    } else {
-        (None, None)
-    };
-
-    if use_tui {
-        let cmd_tx = cmd_tx.expect("tui command tx missing");
-        let cfg_arc = std::sync::Arc::new(cfg.clone());
-        let app_task = tokio::spawn(async move { app::run(cfg, keypair, cmd_rx).await });
-        let tui_res = ui::run_tui(
-            std::sync::Arc::clone(&cfg_arc),
-            config_path.clone(),
-            tui_event_rx.expect("tui event rx missing"),
-            cmd_tx.clone(),
-            update_available.map(|u| u.latest),
-        )
-        .await;
-        if tui_res.is_err() {
-            let _ = cmd_tx.send(events::AppCommand::Quit);
+    // Install Ctrl+C handler for graceful shutdown.
+    let (shutdown_tx, shutdown_rx) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            let _ = shutdown_tx.send(events::AppCommand::Quit);
         }
-        let app_res = app_task
-            .await
-            .map_err(|err| anyhow!("app task join error: {err}"))?;
-        app_res?;
-        tui_res
-    } else {
-        app::run(cfg, keypair, cmd_rx).await
-    }
+    });
+
+    app::run(cfg, keypair, Some(shutdown_rx)).await
 }
 
 fn export_private_key(cli: &CliArgs) -> Result<()> {
@@ -225,11 +176,11 @@ fn export_private_key(cli: &CliArgs) -> Result<()> {
     let wallet_kind = wallet::detect_wallet_file_kind(&keystore_path)?;
     if wallet_kind != wallet::WalletFileKind::EncryptedKeystore {
         return Err(anyhow!(
-            "wallet file {} is plaintext JSON; run with TUI to migrate",
+            "wallet file {} is plaintext JSON; run --setup to migrate",
             keystore_path.display()
         ));
     }
-    let keypair = wallet::load_keypair_from_path(&keystore_path, || read_passphrase_non_tui())?;
+    let keypair = wallet::load_keypair_from_path(&keystore_path, || read_passphrase_cli(None))?;
     let bytes = Zeroizing::new(keypair.to_bytes());
     let b58 = Zeroizing::new(bs58::encode(bytes.as_ref()).into_string());
     let mut out = std::io::stdout();
@@ -277,13 +228,23 @@ fn keypair_path_from_config(config_path: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(keypair_path))
 }
 
-fn read_passphrase_non_tui() -> Result<SecretString> {
+/// Read passphrase from env or terminal prompt.
+fn read_passphrase_cli(wallet_pubkey: Option<&str>) -> Result<SecretString> {
     if let Ok(value) = env::var("LASERSELL_WALLET_PASSPHRASE") {
         if !value.trim().is_empty() {
             return Ok(SecretString::new(value));
         }
     }
-    eprint!("Keystore passphrase: ");
+    if let Some(pubkey) = wallet_pubkey {
+        let truncated = if pubkey.len() > 8 {
+            format!("{}...{}", &pubkey[..4], &pubkey[pubkey.len() - 4..])
+        } else {
+            pubkey.to_string()
+        };
+        eprint!("Unlock wallet ({truncated}): ");
+    } else {
+        eprint!("Keystore passphrase: ");
+    }
     std::io::stderr().flush().ok();
     let passphrase = rpassword::read_password().context("read passphrase")?;
     if passphrase.trim().is_empty() {
@@ -292,11 +253,30 @@ fn read_passphrase_non_tui() -> Result<SecretString> {
     Ok(SecretString::new(passphrase))
 }
 
+/// Prompt for a new passphrase with confirmation.
+fn prompt_new_passphrase() -> Result<SecretString> {
+    loop {
+        eprint!("Set keystore passphrase: ");
+        std::io::stderr().flush().ok();
+        let passphrase = rpassword::read_password().context("read passphrase")?;
+        if passphrase.trim().is_empty() {
+            eprintln!("Passphrase cannot be empty.");
+            continue;
+        }
+        eprint!("Confirm passphrase: ");
+        std::io::stderr().flush().ok();
+        let confirm = rpassword::read_password().context("read passphrase confirmation")?;
+        if passphrase != confirm {
+            eprintln!("Passphrases do not match. Try again.");
+            continue;
+        }
+        return Ok(SecretString::new(passphrase));
+    }
+}
+
 #[derive(Clone, Debug)]
 struct CliArgs {
     config_path: PathBuf,
-    verbose: bool,
-    no_tui: bool,
     debug: bool,
     setup: bool,
     smoke: bool,
@@ -308,7 +288,7 @@ struct CliArgs {
 #[command(
     name = "lasersell",
     version,
-    about = "Single-wallet CLI daemon that listens for exit signals and signs/sends sells."
+    about = "LaserSell CLI — automated exit daemon for Solana."
 )]
 struct RawCliArgs {
     #[arg(
@@ -318,10 +298,6 @@ struct RawCliArgs {
         env = "LASERSELL_CONFIG_PATH"
     )]
     config_path: Option<PathBuf>,
-    #[arg(short = 'v', long = "verbose")]
-    verbose: bool,
-    #[arg(long = "no-tui")]
-    no_tui: bool,
     #[arg(long = "debug", help = "Write debug-level logs to debug.log")]
     debug: bool,
     #[arg(long = "setup")]
@@ -357,7 +333,6 @@ where
 }
 
 fn normalize_cli_args(raw: RawCliArgs) -> Result<CliArgs> {
-    let use_tui = !(raw.verbose || raw.no_tui);
     let export_private_key = raw.export_private_key.is_some();
     let export_private_key_path = raw.export_private_key.flatten();
     if export_private_key_path
@@ -383,8 +358,6 @@ fn normalize_cli_args(raw: RawCliArgs) -> Result<CliArgs> {
         }
         return Ok(CliArgs {
             config_path: raw.config_path.unwrap_or_default(),
-            verbose: raw.verbose,
-            no_tui: raw.no_tui,
             debug: raw.debug,
             setup: raw.setup,
             smoke: raw.smoke,
@@ -394,19 +367,11 @@ fn normalize_cli_args(raw: RawCliArgs) -> Result<CliArgs> {
     }
     let config_path = match raw.config_path {
         Some(path) => path,
-        None => {
-            if use_tui || raw.smoke {
-                default_config_path()?
-            } else {
-                return Err(anyhow!("-f /path/to/config.yml is required"));
-            }
-        }
+        None => default_config_path()?,
     };
 
     Ok(CliArgs {
         config_path,
-        verbose: raw.verbose,
-        no_tui: raw.no_tui,
         debug: raw.debug,
         setup: raw.setup,
         smoke: raw.smoke,
@@ -450,22 +415,6 @@ mod cli_tests {
             cli.export_private_key_path,
             Some(PathBuf::from("/tmp/wallet.keystore.json"))
         );
-    }
-
-    #[test]
-    fn parse_headless_requires_config() {
-        let err = parse_cli_args_from(["lasersell", "--no-tui"]).expect_err("should fail");
-        assert!(err
-            .to_string()
-            .contains("-f /path/to/config.yml is required"));
-    }
-
-    #[test]
-    fn parse_headless_with_config() {
-        let cli = parse_cli_args_from(["lasersell", "--no-tui", "-f", "config.yml"])
-            .expect("parse cli args");
-        assert_eq!(cli.config_path, PathBuf::from("config.yml"));
-        assert!(cli.no_tui);
     }
 
     #[test]
@@ -587,7 +536,6 @@ fn optional_api_key_for_smoke(api_key: &SecretString) -> Option<SecretString> {
 }
 
 fn init_tracing(
-    use_tui: bool,
     debug: bool,
     filter: EnvFilter,
 ) -> Option<tracing_appender::non_blocking::WorkerGuard> {
@@ -682,21 +630,13 @@ fn init_tracing(
             .with_ansi(false)
     });
 
-    if use_tui {
-        tracing_subscriber::registry()
-            .with(error_file_layer)
-            .with(debug_file_layer)
-            .with(events::log_layer())
-            .with(filter)
-            .init();
-    } else {
-        tracing_subscriber::registry()
-            .with(error_file_layer)
-            .with(debug_file_layer)
-            .with(tracing_subscriber::fmt::layer())
-            .with(filter)
-            .init();
-    }
+    // CLI mode: always log to stderr
+    tracing_subscriber::registry()
+        .with(error_file_layer)
+        .with(debug_file_layer)
+        .with(tracing_subscriber::fmt::layer())
+        .with(filter)
+        .init();
 
     guard
 }
