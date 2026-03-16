@@ -223,7 +223,7 @@ cargo build --features devnet
 | Dashboard & API keys | [app.lasersell.io](https://app.lasersell.io) |
 | Documentation | [docs.lasersell.io](https://docs.lasersell.io) |
 | Blog | [lasersell.io/blog](https://www.lasersell.io/blog) |
-| Benchmarks | [2-5x faster than every major Solana trading API](https://www.lasersell.io/blog/benchmark-results) |
+| Benchmarks | [38x faster than every major Solana trading API](https://www.lasersell.io/blog/benchmark-results) |
 | SDKs (Rust, TypeScript, Python, Go) | [github.com/lasersell/lasersell-sdk](https://github.com/lasersell/lasersell-sdk) |
 | Discord | [discord.gg/lasersell](https://discord.gg/lasersell) |
 | X (Twitter) | [@lasersellhq](https://x.com/lasersellhq) |

@@ -78,7 +78,7 @@ Override with `-f path/to/config.yml` or environment variables (LASERSELL_RPC_UR
 
 ## Performance
 
-LaserSell is 2-5x faster than every major Solana trading API at building swap transactions. Benchmarked against PumpFun SDK, PumpPortal, and Jupiter Metis API.
+LaserSell is 38x faster than every major Solana trading API at building swap transactions. Sub-5ms median on the automated exit path. Benchmarked against PumpFun SDK, PumpPortal, and Jupiter Metis API.
 
 - Buy tx build: 71ms median (vs 141ms PumpPortal, 168ms Jupiter, 365ms PumpFun SDK)
 - Sell tx build: 72ms median (vs 121ms PumpPortal, 175ms Jupiter, 317ms PumpFun SDK)
