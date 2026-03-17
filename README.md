@@ -14,6 +14,10 @@
 </p>
 
 <p align="center">
+  <a href="https://www.lasersell.io/download"><strong>Download the Desktop App &rarr;</strong></a>
+</p>
+
+<p align="center">
   <a href="https://crates.io/crates/lasersell"><img alt="crates.io" src="https://img.shields.io/crates/v/lasersell.svg"></a>
   <a href="https://hub.docker.com/r/lasersell/lasersell"><img alt="Docker" src="https://img.shields.io/docker/v/lasersell/lasersell?label=docker&logo=docker"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
