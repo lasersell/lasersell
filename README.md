@@ -56,7 +56,7 @@ lasersell           # start the daemon
 #### Why LaserSell?
 
 - **Rug pull protection.** Automatically exits positions the moment conditions deteriorate, helping prevent total profit loss.
-- **Built for high frequency trading.** Sub-200ms exit delivery with no polling, no stale data, and adaptive retries.
+- **Built for high frequency trading.** No polling, no stale data, and adaptive retries.
 - **Locks in profit instantly.** Secures gains the moment a profit window is available, before the market moves against you.
 
 ## How it works
