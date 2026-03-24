@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use lasersell_sdk::stream::client::StrategyConfigBuilder;
 use lasersell_sdk::stream::proto::{
-    AutoBuyConfigMsg, MarketContextMsg, StrategyConfigMsg, TakeProfitLevelMsg,
+    AutoBuyConfigMsg, MarketContextMsg, MirrorConfigMsg, StrategyConfigMsg, TakeProfitLevelMsg,
     WatchWalletEntryMsg,
 };
 use lasersell_sdk::tx::{SendTarget, TxSubmitError};
@@ -126,7 +126,14 @@ impl AppEngine {
         spawn_usd1_balance_poller(balance_http, rpc_url.clone(), wallet_pubkey);
 
         let stream_send_mode = Some(cfg.send_mode_str().to_string());
-        let watch_wallets = build_watch_wallet_entries(&cfg.watch_wallets, &wallet_pubkey.to_string());
+        let (watch_wallets, mirror_config) = if cfg.mirror.enabled {
+            (
+                build_watch_wallet_entries(&cfg.watch_wallets, &wallet_pubkey.to_string()),
+                build_mirror_config(&cfg.mirror),
+            )
+        } else {
+            (Vec::new(), None)
+        };
         let stream_client = StreamClient::new(
             cfg.account.api_key.clone(),
             cfg.account.local,
@@ -136,6 +143,7 @@ impl AppEngine {
             stream_send_mode,
             cfg.account.tip_lamports,
             watch_wallets,
+            mirror_config,
         );
         let (stream_handle, evt_rx) = stream_client.connect(&keypair).await?;
         let stream_handle = Arc::new(stream_handle);
@@ -883,6 +891,7 @@ fn build_watch_wallet_entries(
 ) -> Vec<WatchWalletEntryMsg> {
     watch_wallets
         .iter()
+        .filter(|w| w.enabled)
         .map(|w| {
             let auto_buy = w.auto_buy.as_ref().and_then(|ab| {
                 let sol_units = (ab.amount * 1e9) as u64;
@@ -903,11 +912,24 @@ fn build_watch_wallet_entries(
             WatchWalletEntryMsg {
                 pubkey: w.pubkey.clone(),
                 auto_buy,
+                mirror_sell: false,
             }
         })
         .collect()
 }
 
+fn build_mirror_config(cfg: &crate::config::MirrorConfig) -> Option<MirrorConfigMsg> {
+    Some(MirrorConfigMsg {
+        max_positions_per_wallet: cfg.max_positions_per_wallet,
+        cooldown_sec: cfg.cooldown_sec,
+        skip_creator_tokens: cfg.skip_creator_tokens,
+        max_active_sol: cfg.max_active_sol,
+        buy_slippage_bps: cfg.buy_slippage_bps,
+        min_liquidity_sol: cfg.min_liquidity_sol,
+        max_entry_drift_pct: cfg.max_entry_drift_pct,
+        max_consecutive_losses: cfg.max_consecutive_losses,
+    })
+}
 
 #[cfg(test)]
 mod tests {

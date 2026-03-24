@@ -4,7 +4,7 @@ use lasersell_sdk::stream::client::{
     StreamClient as SdkStreamClient, StreamConfigure, StreamSender,
 };
 use lasersell_sdk::stream::proto::{
-    MarketContextMsg, ServerMessage, StrategyConfigMsg, WatchWalletEntryMsg,
+    MarketContextMsg, MirrorConfigMsg, ServerMessage, StrategyConfigMsg, WatchWalletEntryMsg,
 };
 use lasersell_sdk::stream::session::{StreamEvent as SdkStreamEvent, StreamSession};
 use secrecy::{ExposeSecret, SecretString};
@@ -23,6 +23,7 @@ pub struct StreamClient {
     send_mode: Option<String>,
     tip_lamports: Option<u64>,
     watch_wallets: Vec<WatchWalletEntryMsg>,
+    mirror_config: Option<MirrorConfigMsg>,
 }
 
 #[derive(Clone, Debug)]
@@ -96,6 +97,7 @@ impl StreamClient {
         send_mode: Option<String>,
         tip_lamports: Option<u64>,
         watch_wallets: Vec<WatchWalletEntryMsg>,
+        mirror_config: Option<MirrorConfigMsg>,
     ) -> Self {
         Self {
             sdk: SdkStreamClient::new(api_key.clone()).with_local_mode(local),
@@ -107,6 +109,7 @@ impl StreamClient {
             send_mode,
             tip_lamports,
             watch_wallets,
+            mirror_config,
         }
     }
 
@@ -137,6 +140,7 @@ impl StreamClient {
         configure.send_mode = self.send_mode.clone();
         configure.tip_lamports = self.tip_lamports;
         configure.watch_wallets = self.watch_wallets.clone();
+        configure.mirror_config = self.mirror_config.clone();
         let mut session = StreamSession::connect(&self.sdk, configure)
             .await
             .context("connect to stream server")?;
@@ -179,6 +183,9 @@ fn sdk_event_label(evt: &SdkStreamEvent) -> &'static str {
         SdkStreamEvent::PnlUpdate { .. } => "pnl_update",
         SdkStreamEvent::LiquiditySnapshot { .. } => "liquidity_snapshot",
         SdkStreamEvent::TradeTick { .. } => "trade_tick",
+        SdkStreamEvent::MirrorBuySignal { .. } => "mirror_buy_signal",
+        SdkStreamEvent::MirrorBuyFailed { .. } => "mirror_buy_failed",
+        SdkStreamEvent::MirrorWalletAutoDisabled { .. } => "mirror_wallet_auto_disabled",
     }
 }
 
@@ -241,6 +248,9 @@ fn map_session_event(evt: SdkStreamEvent) -> Option<StreamEvent> {
             None
         }
         SdkStreamEvent::TradeTick { .. } => None,
+        SdkStreamEvent::MirrorBuySignal { message } => map_server_event(message),
+        SdkStreamEvent::MirrorBuyFailed { message } => map_server_event(message),
+        SdkStreamEvent::MirrorWalletAutoDisabled { message } => map_server_event(message),
     }
 }
 
@@ -332,6 +342,34 @@ fn map_server_event(msg: ServerMessage) -> Option<StreamEvent> {
         ServerMessage::TradeTick { .. } => None,
         ServerMessage::Error { code, message } => {
             warn!(event = "stream_server_error", code = %code, message = %message);
+            None
+        }
+        ServerMessage::MirrorBuySignal { watched_wallet, mint, user_wallet, amount_quote_units, .. } => {
+            info!(
+                event = "mirror_buy_signal",
+                watched_wallet = %watched_wallet,
+                mint = %mint,
+                user_wallet = %user_wallet,
+                amount = amount_quote_units,
+            );
+            None
+        }
+        ServerMessage::MirrorBuyFailed { watched_wallet, mint, reason } => {
+            warn!(
+                event = "mirror_buy_failed",
+                watched_wallet = %watched_wallet,
+                mint = %mint,
+                reason = %reason,
+            );
+            None
+        }
+        ServerMessage::MirrorWalletAutoDisabled { watched_wallet, reason, loss_count } => {
+            warn!(
+                event = "mirror_wallet_auto_disabled",
+                watched_wallet = %watched_wallet,
+                reason = %reason,
+                loss_count,
+            );
             None
         }
     }

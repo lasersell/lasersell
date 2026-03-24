@@ -21,6 +21,8 @@ pub struct Config {
     pub sell: SellConfig,
     #[serde(default)]
     pub watch_wallets: Vec<WatchWalletConfig>,
+    #[serde(default)]
+    pub mirror: MirrorConfig,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -91,7 +93,12 @@ pub struct WatchWalletConfig {
     pub label: Option<String>,
     #[serde(default)]
     pub auto_buy: Option<AutoBuyConfig>,
+    /// Per-wallet enable flag. When false, this wallet is excluded from mirroring.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
+
+fn default_true() -> bool { true }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AutoBuyConfig {
@@ -102,6 +109,46 @@ pub struct AutoBuyConfig {
     #[serde(default)]
     pub amount_usd1: f64,
 }
+
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+pub struct MirrorConfig {
+    /// Master toggle for mirror trading (default: disabled).
+    /// When false, no watch wallets are sent to the stream.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Whether to mirror USD1-quoted markets.
+    #[serde(default)]
+    pub mirror_usd1: bool,
+    /// Max concurrent mirror positions per watched wallet (default 1).
+    #[serde(default = "default_mirror_max_positions")]
+    pub max_positions_per_wallet: u32,
+    /// Cooldown between mirror buys in seconds (default 30).
+    #[serde(default = "default_mirror_cooldown")]
+    pub cooldown_sec: u64,
+    /// Skip tokens created/deployed by the watched wallet.
+    #[serde(default)]
+    pub skip_creator_tokens: bool,
+    /// Max total SOL deployed across all active mirror positions (default 5.0, 0 = unlimited).
+    #[serde(default = "default_mirror_max_active_sol")]
+    pub max_active_sol: f64,
+    /// Slippage tolerance for mirror buys in basis points (default 2500 = 25%).
+    #[serde(default = "default_mirror_buy_slippage")]
+    pub buy_slippage_bps: u16,
+    /// Minimum pool liquidity in SOL to allow a mirror buy (None = disabled).
+    #[serde(default)]
+    pub min_liquidity_sol: Option<f64>,
+    /// Maximum price drift % from watched wallet's entry before skipping (None = disabled).
+    #[serde(default)]
+    pub max_entry_drift_pct: Option<f64>,
+    /// Auto-disable watched wallet after N consecutive failing mirror buys (None = disabled).
+    #[serde(default)]
+    pub max_consecutive_losses: Option<u32>,
+}
+
+fn default_mirror_max_positions() -> u32 { 1 }
+fn default_mirror_cooldown() -> u64 { 30 }
+fn default_mirror_max_active_sol() -> f64 { 5.0 }
+fn default_mirror_buy_slippage() -> u16 { 2500 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SellConfig {

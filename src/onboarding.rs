@@ -781,6 +781,7 @@ fn build_config(inputs: &ConfigInputs, keystore_path: &Path) -> Result<Config> {
             ..SellConfig::default()
         },
         watch_wallets: Vec::new(),
+        mirror: Default::default(),
     })
 }
 
