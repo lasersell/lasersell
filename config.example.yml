@@ -44,3 +44,27 @@ sell:
   slippage_max_bps: 3000               # max slippage cap (bps)
   confirm_timeout_sec: 10              # tx confirmation timeout (25 on devnet)
   max_retries: 3                       # retry count for failed sells
+
+# Mirror (copy) trading settings. Disabled by default.
+# When enabled, the stream auto-buys tokens when watched wallets open positions.
+# Your own exit strategy (TP/SL/trailing) governs all sells.
+mirror:
+  enabled: false                       # master toggle (must be true for any mirroring)
+  # mirror_usd1: false                 # also mirror USD1-quoted markets
+  # max_positions_per_wallet: 1        # max concurrent mirror positions per watched wallet
+  # cooldown_sec: 30                   # seconds between mirror buys per watched wallet
+  # max_active_sol: 5.0                # max total SOL deployed across all mirror positions (0 = unlimited)
+  # buy_slippage_bps: 2500             # slippage tolerance for mirror buys (25%)
+  # skip_creator_tokens: false         # skip tokens created by the watched wallet
+  # min_liquidity_sol: null            # min pool liquidity in SOL (null = disabled)
+  # max_entry_drift_pct: null          # max price drift % from watched entry (null = disabled)
+  # max_consecutive_losses: null       # auto-disable wallet after N failed buys (null = disabled)
+
+# Watch wallets for copy trading. Only active when mirror.enabled is true.
+# watch_wallets:
+#   - pubkey: "WatchedWalletPubkey..."
+#     label: "Trader A"
+#     enabled: true
+#     auto_buy:
+#       amount: 0.1          # SOL per mirror buy
+#       amount_usd1: 5.0     # USD1 per mirror buy (for USD1 markets)
